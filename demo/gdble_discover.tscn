@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3 uid="uid://b5na2suxvydjf"]
+
+[ext_resource type="Script" path="res://gdble_discover.gd" id="1_rte61"]
+
+[node name="GDBLEDiscover" type="GDBLEDiscover"]
+script = ExtResource("1_rte61")
+
+[connection signal="on_device_found" from="." to="." method="_on_on_device_found"]

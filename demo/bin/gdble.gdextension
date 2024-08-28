@@ -1,0 +1,17 @@
+[configuration]
+entry_symbol = "gdble_library_init"
+compatibility_minimum = "4.1"
+
+[libraries]
+windows.debug.x86_64 = "res://bin/windows/libgdble.windows.template_debug.x86_64.dll"
+
+[dependencies]
+
+windows.debug = {
+    "res://bin/simpleble.dll" : "",
+    "res://bin/simpleble-c.dll" : ""
+}
+windows.release = {
+    "res://bin/simpleble.dll" : "",
+    "res://bin/simpleble-c.dll" : ""
+}

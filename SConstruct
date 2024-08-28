@@ -1,3 +1,11 @@
+'''
+FilePath: \SConstruct
+Author: Fantety
+Descripttion: 
+Date: 2024-08-28 09:12:51
+LastEditors: Fantety
+LastEditTime: 2024-08-28 13:44:52
+'''
 #!/usr/bin/env python
 import os
 
@@ -11,7 +19,7 @@ def validate_parent_dir(key, val, env):
         raise UserError("'%s' is not a directory: %s" % (key, os.path.dirname(val)))
 
 
-libname = "EXTENSION-NAME"
+libname = "gdble"
 projectdir = "demo"
 
 localEnv = Environment(tools=["default"], PLATFORM="")
@@ -70,6 +78,7 @@ libraryfile = "bin/{}/{}".format(env["platform"], file)
 library = env.SharedLibrary(
     libraryfile,
     source=sources,
+    LIBS=["godot-cpp/bin/libgodot-cpp.windows.template_debug.x86_64.lib","libs/simpleble/lib/simpleble.lib","libs/simpleble/lib/simpleble-c.lib"]
 )
 
 copy = env.InstallAs("{}/bin/{}/lib{}".format(projectdir, env["platform"], file), library)
