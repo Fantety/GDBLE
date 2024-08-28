@@ -29,8 +29,8 @@ void initialize_gdble_module(ModuleInitializationLevel p_level) {
 		return;
 	}
 
-	//GDREGISTER_RUNTIME_CLASS(GDBLEDiscover);
-	ClassDB::register_class<GDBLEDiscover>();
+	//GDREGISTER_RUNTIME_CLASS(GodotBle);
+	ClassDB::register_class<GodotBle>();
 }
 
 void uninitialize_gdble_module(ModuleInitializationLevel p_level) {

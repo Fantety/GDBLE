@@ -4,7 +4,7 @@
  * @Descripttion: 
  * @Date: 2024-08-28 09:20:26
  * @LastEditors: Fantety
- * @LastEditTime: 2024-08-28 15:26:50
+ * @LastEditTime: 2024-08-28 17:20:10
  */
 /* godot-cpp integration testing project.
  *
@@ -38,10 +38,11 @@
 
 using namespace godot;
 
-class GDBLEDiscover : public Node {
-	GDCLASS(GDBLEDiscover, Node);
+class GodotBle : public Node {
+	GDCLASS(GodotBle, Node);
 private:
 	std::vector<SimpleBLE::Adapter> adapters;
+	std::vector<SimpleBLE::Peripheral> devices;
 	SimpleBLE::Adapter adapter;
 	bool displayed = false;
 
@@ -52,14 +53,15 @@ protected:
 	void emit_update_signal(SimpleBLE::Peripheral peripheral);
 
 public:
-	GDBLEDiscover();
-	~GDBLEDiscover();
+	GodotBle();
+	~GodotBle();
 
     bool bluetooth_enabled();
     Dictionary init_adapter_list();
 	bool set_adapter(int index);
 	void start_scan();
 	void stop_scan();
+	Dictionary show_all_devices();
 };
 
 #endif // EXAMPLE_CLASS_H
