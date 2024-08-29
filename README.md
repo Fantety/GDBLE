@@ -1,4 +1,4 @@
-# GodotBle
+# GodotBLE
 
 A Low Power Bluetooth Plugin for Godot based on SimpleBLE
 
@@ -20,13 +20,13 @@ The plugin is based on [SimpleBLE](https://github.com/OpenBluetoothToolbox/Simpl
 | -------- | ----------------------------------------- |
 | GodotBle | All functions are integrated in this node |
 
-### How to use in GDScript？
+### How to use in GDScript ?
 
-Functions provided by the GodotBle node：
+Functions provided by the GodotBle node: 
 
 | Function                                              | Notes                                                                                                                                                                                     |
 | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| init_adapter_list()                                   | Initialize the list of adapters, all adapters are stored in the node's private member variables.?The return value of this function is a dictionary containing all the adapter information |
+| init_adapter_list()                                   | Initialize the list of adapters, all adapters are stored in the node's private member variables. The return value of this function is a dictionary containing all the adapter information |
 | set_adapter(int index)                                | Select Adapter, pass in an adapter index, default value is 0.                                                                                                                             |
 | start_scan()                                          | Start scanning the environment for Bluetooth devices.                                                                                                                                     |
 | stop_scan()                                           | Stop scanning for surrounding Bluetooth devices.                                                                                                                                          |
@@ -39,28 +39,28 @@ Functions provided by the GodotBle node：
 | get_current_adapter_index()                           | Get the index of the currently selected adapter.                                                                                                                                          |
 | get_current_device_index()                            | Get the index of the currently connected device.                                                                                                                                          |
 
-Signals provided by the GodotBle node：
+Signals provided by the GodotBle node: 
 
 | Signal           | Notes                                                                                                                                  |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| on_device_found  | This signal is triggered when a new device is discovered.?Returns two strings, one for the device name and one for the device address. |
-| on_device_update | Triggers this signal when device information is updated.?Returns two strings, one for the device name and one for the device address.  |
+| on_device_found  | This signal is triggered when a new device is discovered. Returns two strings, one for the device name and one for the device address. |
+| on_device_update | Triggers this signal when device information is updated. Returns two strings, one for the device name and one for the device address.  |
 
 ```gdscript
 extends GodotBle
 func _ready() -> void:
-	print(init_adapter_list())
-	set_adapter(0)
-	start_scan()
-	pass # Replace with function body.
+    print(init_adapter_list())
+    set_adapter(0)
+    start_scan()
+    pass # Replace with function body.
 
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta: float) -> void:
-	pass
+    pass
 
 
 func _on_on_device_found(identifier: String, address: String) -> void:
-	print(identifier,address,'\n')
-	pass # Replace with function body.
+    print(identifier,address,'\n')
+    pass # Replace with function body.
 ```
