@@ -4,7 +4,7 @@
  * @Descripttion: 
  * @Date: 2024-08-28 09:20:26
  * @LastEditors: Fantety
- * @LastEditTime: 2024-08-28 17:20:10
+ * @LastEditTime: 2024-08-29 18:21:13
  */
 /* godot-cpp integration testing project.
  *
@@ -45,6 +45,9 @@ private:
 	std::vector<SimpleBLE::Peripheral> devices;
 	SimpleBLE::Adapter adapter;
 	bool displayed = false;
+	std::vector<std::pair<SimpleBLE::BluetoothUUID, SimpleBLE::BluetoothUUID>> uuids;
+	int current_adapter_index = 0;
+	int current_device_index = 0;
 
 protected:
 	static void _bind_methods();
@@ -53,6 +56,7 @@ protected:
 	void emit_update_signal(SimpleBLE::Peripheral peripheral);
 
 public:
+
 	GodotBle();
 	~GodotBle();
 
@@ -62,6 +66,12 @@ public:
 	void start_scan();
 	void stop_scan();
 	Dictionary show_all_devices();
+	int get_adapters_index_from_identifier(String identifier);
+	int get_device_index_from_identifier(String identifier);
+	int connect_to_device(int index);
+	int get_current_adapter_index();
+	int get_current_device_index();
+	Dictionary show_all_services();
 };
 
 #endif // EXAMPLE_CLASS_H
