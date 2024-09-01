@@ -4,7 +4,7 @@
  * @Descripttion: 
  * @Date: 2024-08-28 09:20:10
  * @LastEditors: Fantety
- * @LastEditTime: 2024-08-29 18:36:14
+ * @LastEditTime: 2024-09-01 11:54:17
  */
 /* godot-cpp integration testing project.
  *
@@ -121,6 +121,7 @@ int GodotBle::connect_to_device(int index){
     if(devices[index].is_connected())
         return -2;
     devices[index].connect();
+    current_device = &devices[index];
     current_device_index = index;
     uuids.clear();
     for (auto service : devices[index].services()) {
@@ -131,9 +132,20 @@ int GodotBle::connect_to_device(int index){
     return 0;
 }
 
+int GodotBle::disconnect_from_device(){
+    if(current_device_index<0 || current_device_index>= devices.size())
+        return -1;
+    if(!current_device->is_connected())
+        return -2;
+    current_device->disconnect();
+    current_device = nullptr;
+    current_device_index = -1;
+    return 0;
+}
+
 Dictionary GodotBle::show_all_services(){
     Dictionary temp;
-    if(devices[current_device_index].is_connected()){
+    if(!current_device->is_connected()){
         temp["warning"]="Device is not connected";
         return temp;
     }
@@ -146,6 +158,35 @@ Dictionary GodotBle::show_all_services(){
         temp[i.first.c_str()]=i.second.c_str();
     }
     return temp;
+}
+
+String GodotBle::read_data_from_service(int index){
+    if(!current_device->is_connected()){
+        return "Device is not connected";
+    }
+    if(index<0 || index>= uuids.size())
+        return "Invalid index";
+    SimpleBLE::ByteArray rx_data = current_device->read(uuids[index].first, uuids[index].second);
+    return String{rx_data.c_str()};
+}
+
+std::string GodotBle::godot_string_to_cpp_string(String str){
+    // int length = str.utf8().length();
+    // // 使用std::string的构造函数直接从Godot字符串的UTF-8表示创建std::string
+    // return std::string(str.utf8().get_data(), length);
+    return "";
+}
+
+int GodotBle::write_data_to_service(int index, String data){
+    if(!current_device->is_connected()){
+        return -1;
+    }
+    if(index<0 || index>= uuids.size())
+        return -2;
+    //std::string cpp_data = data.utf8().get_data();
+    //SimpleBLE::ByteArray bytes = cpp_data;
+    current_device->write_command(uuids[index].first, uuids[index].second, data.utf8().get_data());
+    return 0;
 }
 
 void GodotBle::emit_found_signal(SimpleBLE::Peripheral peripheral){
@@ -171,6 +212,8 @@ void GodotBle::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_current_adapter_index"), &GodotBle::get_current_adapter_index);
     ClassDB::bind_method(D_METHOD("get_current_device_index"), &GodotBle::get_current_device_index);
     ClassDB::bind_method(D_METHOD("show_all_services"), &GodotBle::show_all_services);
+    ClassDB::bind_method(D_METHOD("read_data_from_service","index"), &GodotBle::read_data_from_service,DEFVAL(0));
+    ClassDB::bind_method(D_METHOD("write_data_to_service","index","data"), &GodotBle::write_data_to_service);
     ADD_SIGNAL(MethodInfo("on_device_found", PropertyInfo(Variant::STRING, "identifier"), PropertyInfo(Variant::STRING, "address")));
     ADD_SIGNAL(MethodInfo("on_device_update", PropertyInfo(Variant::STRING, "identifier"), PropertyInfo(Variant::STRING, "address")));
 }   

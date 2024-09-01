@@ -4,7 +4,7 @@
  * @Descripttion: 
  * @Date: 2024-08-28 09:20:26
  * @LastEditors: Fantety
- * @LastEditTime: 2024-08-29 18:21:13
+ * @LastEditTime: 2024-09-01 11:46:06
  */
 /* godot-cpp integration testing project.
  *
@@ -43,17 +43,19 @@ class GodotBle : public Node {
 private:
 	std::vector<SimpleBLE::Adapter> adapters;
 	std::vector<SimpleBLE::Peripheral> devices;
+	SimpleBLE::Peripheral* current_device = nullptr;
 	SimpleBLE::Adapter adapter;
 	bool displayed = false;
 	std::vector<std::pair<SimpleBLE::BluetoothUUID, SimpleBLE::BluetoothUUID>> uuids;
-	int current_adapter_index = 0;
-	int current_device_index = 0;
+	int current_adapter_index = -1;
+	int current_device_index = -1;
 
 protected:
 	static void _bind_methods();
 	
 	void emit_found_signal(SimpleBLE::Peripheral peripheral);
 	void emit_update_signal(SimpleBLE::Peripheral peripheral);
+	std::string godot_string_to_cpp_string(String godot_string);
 
 public:
 
@@ -69,9 +71,12 @@ public:
 	int get_adapters_index_from_identifier(String identifier);
 	int get_device_index_from_identifier(String identifier);
 	int connect_to_device(int index);
+	int disconnect_from_device();
 	int get_current_adapter_index();
 	int get_current_device_index();
 	Dictionary show_all_services();
+	String read_data_from_service(int index);
+	int write_data_to_service(int index, String data);
 };
 
 #endif // EXAMPLE_CLASS_H
