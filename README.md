@@ -1,5 +1,9 @@
 # GodotBLE
 
+![GitHub commit activity](https://img.shields.io/github/commit-activity/m/Fantety/GodotBLE)
+
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Fantety/GodotBLE/builds.yml)
+
 一个为Godot4.0开发的低功率蓝牙插件，可以帮助你的游戏联合更多有趣的设备
 
 ### 概述
@@ -54,34 +58,32 @@ extends GodotBle
 signal start_write
 
 func _ready() -> void:
-	print(init_adapter_list())
-	set_adapter(0)
-	start_scan()
-	pass
+    print(init_adapter_list())
+    set_adapter(0)
+    start_scan()
+    pass
 
 func _process(delta: float) -> void:
-	pass
+    pass
 
 
 func _on_on_device_found(identifier: String, address: String) -> void:
-	print(identifier,'\t',address)
-	if identifier=='ESP32':
-		stop_scan()
-		print(get_device_index_from_identifier('ESP32'))
-		if connect_to_device(get_device_index_from_identifier('ESP32'))==0:
-			print("success connnect")
-			pass
-		print(show_all_services())
-		print(get_current_device_index())
-		emit_signal("start_write")
-		pass
-	pass # Replace with function body.
+    print(identifier,'\t',address)
+    if identifier=='ESP32':
+        stop_scan()
+        print(get_device_index_from_identifier('ESP32'))
+        if connect_to_device(get_device_index_from_identifier('ESP32'))==0:
+            print("success connnect")
+            pass
+        print(show_all_services())
+        print(get_current_device_index())
+        emit_signal("start_write")
+        pass
+    pass # Replace with function body.
 
 
 func _on_start_write() -> void:
-	print("start_write")
-	print(write_data_to_service(3,"r#hello"))
-	pass # Replace with function body.
-
-
+    print("start_write")
+    print(write_data_to_service(3,"r#hello"))
+    pass # Replace with function body.
 ```
