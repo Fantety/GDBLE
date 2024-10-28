@@ -3,6 +3,7 @@
 
 # Ignore library files but not the gdextension file
 demo/bin/*
+bin/*
 !demo/bin/android
 demo/bin/android/*
 !demo/bin/android/.gitkeep
@@ -33,7 +34,6 @@ compile_commands.json
 *.pyc
 *.dblite
 *.pdb
-*.lib
 *.config
 *.creator
 *.creator.user
