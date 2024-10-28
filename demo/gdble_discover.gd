@@ -33,3 +33,13 @@ func _on_start_write() -> void:
 	print("start_write")
 	print(write_data_to_service(3,"r#hello"))
 	pass # Replace with function body.
+
+
+func _on_button_pressed() -> void:
+	print(write_data_to_service(3,"60"))
+	pass # Replace with function body.
+
+
+func _on_button_2_pressed() -> void:
+	print(write_data_to_service(3,"180"))
+	pass # Replace with function body.

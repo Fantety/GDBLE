@@ -33,6 +33,36 @@
 | -------- | --------------- |
 | GodotBLE | 所有功能都包含在这一个节点当中 |
 
+### 如何在Godot中加载GodotBLE
+
+首先在godot项目中的任意位置创建一个*.gdextension文件
+
+gdextension文件内容参考
+
+```ini
+[configuration]
+entry_symbol = "gdble_library_init"
+compatibility_minimum = "4.1"
+
+[libraries]
+windows.debug.x86_64 = "res://bin/windows/libgdble.windows.template_debug.x86_64.dll"
+
+[dependencies]
+
+windows.debug = {
+    "res://bin/simpleble.dll" : "",
+    "res://bin/simpleble-c.dll" : ""
+}
+windows.release = {
+    "res://bin/simpleble.dll" : "",
+    "res://bin/simpleble-c.dll" : ""
+}
+```
+
+可以看到上面的内容包含了三个dll文件，按照gdextension文件所写的路径把这三个文件放到正确的地方就好了。
+
+这个三个文件可以在Release中下载。
+
 ### 怎样在 GDScript 中使用GodotBLE?
 
 在 GodotBLE 节点中提供以下一些函数及方法: 

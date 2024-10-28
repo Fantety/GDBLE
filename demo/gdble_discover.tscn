@@ -5,5 +5,23 @@
 [node name="GodotBLE" type="GodotBLE"]
 script = ExtResource("1_rte61")
 
+[node name="Button" type="Button" parent="."]
+offset_left = 109.0
+offset_top = 91.0
+offset_right = 414.0
+offset_bottom = 207.0
+theme_override_font_sizes/font_size = 50
+text = "60"
+
+[node name="Button2" type="Button" parent="."]
+offset_left = 103.0
+offset_top = 293.0
+offset_right = 426.0
+offset_bottom = 414.0
+theme_override_font_sizes/font_size = 50
+text = "180"
+
 [connection signal="on_device_found" from="." to="." method="_on_on_device_found"]
 [connection signal="start_write" from="." to="." method="_on_start_write"]
+[connection signal="pressed" from="Button" to="." method="_on_button_pressed"]
+[connection signal="pressed" from="Button2" to="." method="_on_button_2_pressed"]

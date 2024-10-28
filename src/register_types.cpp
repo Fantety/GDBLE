@@ -4,7 +4,7 @@
  * @Descripttion: 
  * @Date: 2024-08-28 09:12:51
  * @LastEditors: Fantety
- * @LastEditTime: 2024-10-28 14:05:50
+ * @LastEditTime: 2024-10-28 14:38:37
  */
 /* godot-cpp integration testing project.
  *
@@ -50,5 +50,5 @@ GDExtensionBool GDE_EXPORT gdble_library_init(GDExtensionInterfaceGetProcAddress
 	init_obj.set_minimum_library_initialization_level(MODULE_INITIALIZATION_LEVEL_SCENE);
 
 	return init_obj.init();
-}
+	}
 }
