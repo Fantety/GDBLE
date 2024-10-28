@@ -4,7 +4,7 @@
  * @Descripttion: 
  * @Date: 2024-08-28 09:12:51
  * @LastEditors: Fantety
- * @LastEditTime: 2024-08-28 14:13:46
+ * @LastEditTime: 2024-10-28 14:05:50
  */
 /* godot-cpp integration testing project.
  *
@@ -30,7 +30,8 @@ void initialize_gdble_module(ModuleInitializationLevel p_level) {
 	}
 
 	//GDREGISTER_RUNTIME_CLASS(GodotBLE);
-	ClassDB::register_class<GodotBLE>();
+	GDREGISTER_CLASS(GodotBLE);
+	//ClassDB::register_class<GodotBLE>();
 }
 
 void uninitialize_gdble_module(ModuleInitializationLevel p_level) {

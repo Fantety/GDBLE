@@ -13,8 +13,6 @@
 </div>
 <br />
 
-
-
 一个为Godot4.0开发的低功率蓝牙插件，可以帮助你的游戏联合更多有趣的设备
 
 ### 概述
@@ -39,20 +37,22 @@
 
 在 GodotBLE 节点中提供以下一些函数及方法: 
 
-| 方法                                                    | 描述                     |
-| ----------------------------------------------------- | ---------------------- |
-| init_adapter_list()                                   | 用于初始化蓝牙设备适配器           |
-| set_adapter(int index)                                | 选择适配器                  |
-| start_scan()                                          | 开始扫描环境当中的蓝牙设备          |
-| stop_scan()                                           | 停止扫描环境当中的蓝牙设备          |
-| bluetooth_enabled()                                   | 返回一个布尔值，用于判断蓝牙适配器是否启用。 |
-| get_adapters_index_from_identifier(String identifier) | 根据适配器名称获取其在适配器列表中的索引。  |
-| get_device_index_from_identifier(String identifier)   | 根据设备名称获取其在设备列表中的索引。    |
-| connect_to_device(int index)                          | 连接到指定的蓝牙设备。            |
-| show_all_services()                                   | 显示已连接蓝牙设备的所有服务。        |
-| show_all_devices()                                    | 显示当前设备列表中的所有设备。        |
-| get_current_adapter_index()                           | 获取当前所选适配器的索引。          |
-| get_current_device_index()                            | 获取当前连接设备的索引。           |
+| 方法                                                    | 描述                                    |
+| ----------------------------------------------------- | ------------------------------------- |
+| init_adapter_list()                                   | 用于初始化蓝牙设备适配器                          |
+| set_adapter(int index)                                | 选择适配器                                 |
+| start_scan()                                          | 开始扫描环境当中的蓝牙设备                         |
+| stop_scan()                                           | 停止扫描环境当中的蓝牙设备                         |
+| bluetooth_enabled()                                   | 返回一个布尔值，用于判断蓝牙适配器是否启用。                |
+| get_adapters_index_from_identifier(String identifier) | 根据适配器名称获取其在适配器列表中的索引。                 |
+| get_device_index_from_identifier(String identifier)   | 根据设备名称获取其在设备列表中的索引。                   |
+| connect_to_device(int index)                          | 连接到指定的蓝牙设备。                           |
+| show_all_services()                                   | 显示已连接蓝牙设备的所有服务。                       |
+| show_all_devices()                                    | 显示当前设备列表中的所有设备。                       |
+| get_current_adapter_index()                           | 获取当前所选适配器的索引。                         |
+| get_current_device_index()                            | 获取当前连接设备的索引。                          |
+| read_data_from_service(int index)                     | 读取数据，index为为characteristic的索引，返回值为字符串 |
+| write_data_to_service(int index, String data)         | 写入数据，index为characteristic的索引          |
 
 由 GodotBLE 节点提供的信号：
 
