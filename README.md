@@ -1,8 +1,18 @@
-# GodotBLE
+<div align="center">
+  <h1>GodotBLE</h1>
+  
+ <p>
+    <img lt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/Fantety/GodotBLE/builds.yml">
+    <img alt="GitHub code size in bytes" src="https://img.shields.io/github/languages/code-size/Fantety/GodotBLE">
+    <img alt="GitHub language count" src="https://img.shields.io/github/languages/count/Fantety/GodotBLE">
+<!--     <img src="https://img.shields.io/github/package-json/v/Ritusan/color-library" alt="version" /> -->
+  </p>
+  <p><i></i></p>
+</div>
+<br />
 
-![GitHub commit activity](https://img.shields.io/github/commit-activity/m/Fantety/GodotBLE)
 
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Fantety/GodotBLE/builds.yml)
+
 
 一个为Godot4.0开发的低功率蓝牙插件，可以帮助你的游戏联合更多有趣的设备
 
