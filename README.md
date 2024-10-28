@@ -1,7 +1,9 @@
 <div align="center">
   <h1>GodotBLE</h1>
-  
- <p>
+<p>
+<img src="https://img.picui.cn/free/2024/10/28/671f1110963c8.png"/>
+</p>
+<p>
     <img lt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/Fantety/GodotBLE/builds.yml">
     <img alt="GitHub code size in bytes" src="https://img.shields.io/github/languages/code-size/Fantety/GodotBLE">
     <img alt="GitHub language count" src="https://img.shields.io/github/languages/count/Fantety/GodotBLE">
@@ -10,7 +12,6 @@
   <p><i></i></p>
 </div>
 <br />
-
 
 
 
