@@ -24,14 +24,14 @@
 
 using namespace godot;
 
-bool GodotBle::bluetooth_enabled() {
+bool GodotBLE::bluetooth_enabled() {
 	if (!SimpleBLE::Adapter::bluetooth_enabled()) {
         return true;
     }
     return false;
 }
 
-Dictionary GodotBle::init_adapter_list(){
+Dictionary GodotBLE::init_adapter_list(){
     Dictionary temp;
     adapters.clear();
     adapters = SimpleBLE::Adapter::get_adapters();
@@ -47,7 +47,7 @@ Dictionary GodotBle::init_adapter_list(){
 }
 
 
-bool GodotBle::set_adapter(int index){
+bool GodotBLE::set_adapter(int index){
     if(index<0 || index>= adapters.size())
         return false;
     adapter = adapters[index];
@@ -58,13 +58,13 @@ bool GodotBle::set_adapter(int index){
     adapter.set_callback_on_scan_stop([]()->String {
         return "Device Scan stopped\n";
     });
-    adapter.set_callback_on_scan_found(std::bind(&GodotBle::emit_found_signal,this,std::placeholders::_1));
-    adapter.set_callback_on_scan_updated(std::bind(&GodotBle::emit_update_signal, this, std::placeholders::_1));
+    adapter.set_callback_on_scan_found(std::bind(&GodotBLE::emit_found_signal,this,std::placeholders::_1));
+    adapter.set_callback_on_scan_updated(std::bind(&GodotBLE::emit_update_signal, this, std::placeholders::_1));
     return true;
 }
 
 
-int GodotBle::get_adapters_index_from_identifier(String identifier){
+int GodotBLE::get_adapters_index_from_identifier(String identifier){
     for (int i = 0; i < adapters.size(); i++)
     {
         if(adapters[i].identifier().empty() && adapters[i].address().empty())
@@ -75,7 +75,7 @@ int GodotBle::get_adapters_index_from_identifier(String identifier){
     return -1;
 }
 
-int GodotBle::get_device_index_from_identifier(String identifier){
+int GodotBLE::get_device_index_from_identifier(String identifier){
     for (int i = 0; i < devices.size(); i++)
     {
         if(devices[i].identifier().empty() && devices[i].address().empty())
@@ -86,23 +86,23 @@ int GodotBle::get_device_index_from_identifier(String identifier){
     return -1;
 }
 
-int GodotBle::get_current_adapter_index(){
+int GodotBLE::get_current_adapter_index(){
     return current_adapter_index;
 }
 
-int GodotBle::get_current_device_index(){
+int GodotBLE::get_current_device_index(){
     return current_device_index;
 }
 
-void GodotBle::start_scan(){
+void GodotBLE::start_scan(){
     devices.clear();
     adapter.scan_start();
 }
-void GodotBle::stop_scan(){
+void GodotBLE::stop_scan(){
     adapter.scan_stop();
 }
 
-Dictionary GodotBle::show_all_devices(){
+Dictionary GodotBLE::show_all_devices(){
     Dictionary temp;
     if(devices.empty()){
         temp["warning"]="No devices found";
@@ -115,7 +115,7 @@ Dictionary GodotBle::show_all_devices(){
     return temp;
 }
 
-int GodotBle::connect_to_device(int index){
+int GodotBLE::connect_to_device(int index){
     if(index<0 || index>= devices.size())
         return -1;
     if(devices[index].is_connected())
@@ -133,7 +133,7 @@ int GodotBle::connect_to_device(int index){
     return 0;
 }
 
-int GodotBle::disconnect_from_device(){
+int GodotBLE::disconnect_from_device(){
     if(current_device_index<0 || current_device_index>= devices.size())
         return -1;
     if(!current_device->is_connected())
@@ -144,7 +144,7 @@ int GodotBle::disconnect_from_device(){
     return 0;
 }
 
-Dictionary GodotBle::show_all_services(){
+Dictionary GodotBLE::show_all_services(){
     Dictionary temp;
     if(!current_device->is_connected()){
         temp["warning"]="Device is not connected";
@@ -161,7 +161,7 @@ Dictionary GodotBle::show_all_services(){
     return temp;
 }
 
-String GodotBle::read_data_from_service(int index){
+String GodotBLE::read_data_from_service(int index){
     if(!current_device->is_connected()){
         return "Device is not connected";
     }
@@ -171,14 +171,14 @@ String GodotBle::read_data_from_service(int index){
     return String{rx_data.c_str()};
 }
 
-std::string GodotBle::godot_string_to_cpp_string(String str){
+std::string GodotBLE::godot_string_to_cpp_string(String str){
     // int length = str.utf8().length();
     // // 使用std::string的构造函数直接从Godot字符串的UTF-8表示创建std::string
     // return std::string(str.utf8().get_data(), length);
     return "";
 }
 
-int GodotBle::write_data_to_service(int index, String data){
+int GodotBLE::write_data_to_service(int index, String data){
     if(!current_device->is_connected()){
         return -1;
     }
@@ -204,39 +204,39 @@ int GodotBle::write_data_to_service(int index, String data){
     return -3;
 }
 
-void GodotBle::emit_found_signal(SimpleBLE::Peripheral peripheral){
+void GodotBLE::emit_found_signal(SimpleBLE::Peripheral peripheral){
     devices.push_back(peripheral);
     call_deferred("emit_signal", "on_device_found", peripheral.identifier().empty()?"Unknown":peripheral.identifier().c_str(), peripheral.address().c_str());
     //emit_signal("on_device_found", peripheral.identifier().c_str(), peripheral.address().c_str());
 }
-void GodotBle::emit_update_signal(SimpleBLE::Peripheral peripheral){
+void GodotBLE::emit_update_signal(SimpleBLE::Peripheral peripheral){
     call_deferred("emit_signal", "on_device_update", peripheral.identifier().empty()?"Unknown":peripheral.identifier().c_str(), peripheral.address().c_str());
     //emit_signal("on_device_update", peripheral.identifier().c_str(), peripheral.address().c_str());
 }
 
-void GodotBle::_bind_methods() {
-	ClassDB::bind_method(D_METHOD("bluetooth_enabled"), &GodotBle::bluetooth_enabled);
-    ClassDB::bind_method(D_METHOD("init_adapter_list"), &GodotBle::init_adapter_list);
-    ClassDB::bind_method(D_METHOD("start_scan"), &GodotBle::start_scan);
-    ClassDB::bind_method(D_METHOD("stop_scan"), &GodotBle::stop_scan);
-    ClassDB::bind_method(D_METHOD("get_adapters_index_from_identifier","identifier"), &GodotBle::get_adapters_index_from_identifier);
-    ClassDB::bind_method(D_METHOD("get_device_index_from_identifier","identifier"), &GodotBle::get_device_index_from_identifier);
-    ClassDB::bind_method(D_METHOD("set_adapter","index"), &GodotBle::set_adapter,DEFVAL(0));
-    ClassDB::bind_method(D_METHOD("show_all_devices"), &GodotBle::show_all_devices);
-    ClassDB::bind_method(D_METHOD("connect_to_device","index"), &GodotBle::connect_to_device,DEFVAL(0));
-    ClassDB::bind_method(D_METHOD("get_current_adapter_index"), &GodotBle::get_current_adapter_index);
-    ClassDB::bind_method(D_METHOD("get_current_device_index"), &GodotBle::get_current_device_index);
-    ClassDB::bind_method(D_METHOD("show_all_services"), &GodotBle::show_all_services);
-    ClassDB::bind_method(D_METHOD("read_data_from_service","index"), &GodotBle::read_data_from_service,DEFVAL(0));
-    ClassDB::bind_method(D_METHOD("write_data_to_service","index","data"), &GodotBle::write_data_to_service);
+void GodotBLE::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("bluetooth_enabled"), &GodotBLE::bluetooth_enabled);
+    ClassDB::bind_method(D_METHOD("init_adapter_list"), &GodotBLE::init_adapter_list);
+    ClassDB::bind_method(D_METHOD("start_scan"), &GodotBLE::start_scan);
+    ClassDB::bind_method(D_METHOD("stop_scan"), &GodotBLE::stop_scan);
+    ClassDB::bind_method(D_METHOD("get_adapters_index_from_identifier","identifier"), &GodotBLE::get_adapters_index_from_identifier);
+    ClassDB::bind_method(D_METHOD("get_device_index_from_identifier","identifier"), &GodotBLE::get_device_index_from_identifier);
+    ClassDB::bind_method(D_METHOD("set_adapter","index"), &GodotBLE::set_adapter,DEFVAL(0));
+    ClassDB::bind_method(D_METHOD("show_all_devices"), &GodotBLE::show_all_devices);
+    ClassDB::bind_method(D_METHOD("connect_to_device","index"), &GodotBLE::connect_to_device,DEFVAL(0));
+    ClassDB::bind_method(D_METHOD("get_current_adapter_index"), &GodotBLE::get_current_adapter_index);
+    ClassDB::bind_method(D_METHOD("get_current_device_index"), &GodotBLE::get_current_device_index);
+    ClassDB::bind_method(D_METHOD("show_all_services"), &GodotBLE::show_all_services);
+    ClassDB::bind_method(D_METHOD("read_data_from_service","index"), &GodotBLE::read_data_from_service,DEFVAL(0));
+    ClassDB::bind_method(D_METHOD("write_data_to_service","index","data"), &GodotBLE::write_data_to_service);
     ADD_SIGNAL(MethodInfo("on_device_found", PropertyInfo(Variant::STRING, "identifier"), PropertyInfo(Variant::STRING, "address")));
     ADD_SIGNAL(MethodInfo("on_device_update", PropertyInfo(Variant::STRING, "identifier"), PropertyInfo(Variant::STRING, "address")));
 }   
 
-GodotBle::GodotBle() {
+GodotBLE::GodotBLE() {
     
 }
 
-GodotBle::~GodotBle() {
+GodotBLE::~GodotBLE() {
 }
 

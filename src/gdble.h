@@ -4,7 +4,7 @@
  * @Descripttion: 
  * @Date: 2024-08-28 09:20:26
  * @LastEditors: Fantety
- * @LastEditTime: 2024-10-28 09:51:41
+ * @LastEditTime: 2024-10-28 13:39:50
  */
 /* godot-cpp integration testing project.
  *
@@ -38,8 +38,8 @@
 
 using namespace godot;
 
-class GodotBle : public Node {
-	GDCLASS(GodotBle, Node);
+class GodotBLE : public Node {
+	GDCLASS(GodotBLE, Node);
 private:
 	std::vector<SimpleBLE::Adapter> adapters;
 	std::vector<SimpleBLE::Peripheral> devices;
@@ -60,8 +60,8 @@ protected:
 
 public:
 
-	GodotBle();
-	~GodotBle();
+	GodotBLE();
+	~GodotBLE();
 
     bool bluetooth_enabled();
     Dictionary init_adapter_list();

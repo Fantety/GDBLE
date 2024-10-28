@@ -1,4 +1,4 @@
-extends GodotBle
+extends GodotBLE
 
 signal start_write
 # Called when the node enters the scene tree for the first time.
