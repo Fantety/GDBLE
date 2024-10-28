@@ -4,7 +4,7 @@
  * @Descripttion: 
  * @Date: 2024-08-28 09:20:10
  * @LastEditors: Fantety
- * @LastEditTime: 2024-09-01 11:54:17
+ * @LastEditTime: 2024-10-28 10:14:38
  */
 /* godot-cpp integration testing project.
  *
@@ -124,9 +124,10 @@ int GodotBle::connect_to_device(int index){
     current_device = &devices[index];
     current_device_index = index;
     uuids.clear();
-    for (auto service : devices[index].services()) {
+    for (auto service : current_device->services()) {
         for (auto characteristic : service.characteristics()) {
             uuids.push_back(std::make_pair(service.uuid(), characteristic.uuid()));
+            characteristics.push_back(characteristic);
         }
     }
     return 0;
@@ -183,10 +184,24 @@ int GodotBle::write_data_to_service(int index, String data){
     }
     if(index<0 || index>= uuids.size())
         return -2;
-    //std::string cpp_data = data.utf8().get_data();
-    //SimpleBLE::ByteArray bytes = cpp_data;
-    current_device->write_command(uuids[index].first, uuids[index].second, data.utf8().get_data());
-    return 0;
+    std::string cpp_data = data.utf8().get_data();
+    SimpleBLE::ByteArray bytes = cpp_data;
+    if (current_device != nullptr)
+    {
+        if(characteristics[index].can_write_command()){
+            current_device->write_command(uuids[index].first, uuids[index].second, bytes);
+            return 0;
+        }
+        else if(characteristics[index].can_write_request()){
+            current_device->write_request(uuids[index].first, uuids[index].second, bytes);
+            return 0;
+        }
+        else{
+            return -4;
+        }
+        /* code */
+    }
+    return -3;
 }
 
 void GodotBle::emit_found_signal(SimpleBLE::Peripheral peripheral){

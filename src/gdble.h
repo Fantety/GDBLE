@@ -4,7 +4,7 @@
  * @Descripttion: 
  * @Date: 2024-08-28 09:20:26
  * @LastEditors: Fantety
- * @LastEditTime: 2024-09-01 11:46:06
+ * @LastEditTime: 2024-10-28 09:51:41
  */
 /* godot-cpp integration testing project.
  *
@@ -34,7 +34,7 @@
 #include <godot_cpp/core/binder_common.hpp>
 #include <godot_cpp/core/gdvirtual.gen.inc>
 
-#include <simpleble/SimpleBLE.h>
+#include "utils.h"
 
 using namespace godot;
 
@@ -47,6 +47,7 @@ private:
 	SimpleBLE::Adapter adapter;
 	bool displayed = false;
 	std::vector<std::pair<SimpleBLE::BluetoothUUID, SimpleBLE::BluetoothUUID>> uuids;
+	std::vector<SimpleBLE::Characteristic> characteristics;
 	int current_adapter_index = -1;
 	int current_device_index = -1;
 

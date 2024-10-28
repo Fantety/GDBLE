@@ -15,11 +15,11 @@ func _process(delta: float) -> void:
 
 
 func _on_on_device_found(identifier: String, address: String) -> void:
-	print(identifier,address,'\n')
-	if identifier=='TEST-BLE':
+	print(identifier,'\t',address)
+	if identifier=='ESP32':
 		stop_scan()
-		print(get_device_index_from_identifier('TEST-BLE'))
-		if connect_to_device(get_device_index_from_identifier('TEST-BLE'))==0:
+		print(get_device_index_from_identifier('ESP32'))
+		if connect_to_device(get_device_index_from_identifier('ESP32'))==0:
 			print("success connnect")
 			pass
 		print(show_all_services())
@@ -31,5 +31,5 @@ func _on_on_device_found(identifier: String, address: String) -> void:
 
 func _on_start_write() -> void:
 	print("start_write")
-	write_data_to_service(2,"r#hello")
+	print(write_data_to_service(3,"r#hello"))
 	pass # Replace with function body.
