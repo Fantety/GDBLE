@@ -4,7 +4,7 @@
  * @Descripttion: 
  * @Date: 2024-08-28 09:20:10
  * @LastEditors: Fantety
- * @LastEditTime: 2024-10-28 10:14:38
+ * @LastEditTime: 2024-10-29 09:27:56
  */
 /* godot-cpp integration testing project.
  *
@@ -52,12 +52,8 @@ bool GodotBLE::set_adapter(int index){
         return false;
     adapter = adapters[index];
     current_adapter_index = index;
-    adapter.set_callback_on_scan_start([]()->String {
-        return "Device Scan started\n";
-    });
-    adapter.set_callback_on_scan_stop([]()->String {
-        return "Device Scan stopped\n";
-    });
+    adapter.set_callback_on_scan_start(std::bind(&GodotBLE::emit_scan_start,this));
+    adapter.set_callback_on_scan_stop(std::bind(&GodotBLE::emit_scan_stop,this));
     adapter.set_callback_on_scan_found(std::bind(&GodotBLE::emit_found_signal,this,std::placeholders::_1));
     adapter.set_callback_on_scan_updated(std::bind(&GodotBLE::emit_update_signal, this, std::placeholders::_1));
     return true;
@@ -206,12 +202,21 @@ int GodotBLE::write_data_to_service(int index, String data){
 
 void GodotBLE::emit_found_signal(SimpleBLE::Peripheral peripheral){
     devices.push_back(peripheral);
-    call_deferred("emit_signal", "on_device_found", peripheral.identifier().empty()?"Unknown":peripheral.identifier().c_str(), peripheral.address().c_str());
+    call_deferred("emit_signal", "device_found", peripheral.identifier().empty()?"Unknown":peripheral.identifier().c_str(), peripheral.address().c_str());
     //emit_signal("on_device_found", peripheral.identifier().c_str(), peripheral.address().c_str());
 }
 void GodotBLE::emit_update_signal(SimpleBLE::Peripheral peripheral){
-    call_deferred("emit_signal", "on_device_update", peripheral.identifier().empty()?"Unknown":peripheral.identifier().c_str(), peripheral.address().c_str());
+    call_deferred("emit_signal", "device_update", peripheral.identifier().empty()?"Unknown":peripheral.identifier().c_str(), peripheral.address().c_str());
     //emit_signal("on_device_update", peripheral.identifier().c_str(), peripheral.address().c_str());
+}
+
+void GodotBLE::emit_scan_stop(){
+    call_deferred("emit_signal", "scan_stop");
+    //emit_signal("scan_stop");
+}
+void GodotBLE::emit_scan_start(){
+    call_deferred("emit_signal", "scan_start");
+    //emit_signal("scan_start");
 }
 
 void GodotBLE::_bind_methods() {
@@ -229,8 +234,10 @@ void GodotBLE::_bind_methods() {
     ClassDB::bind_method(D_METHOD("show_all_services"), &GodotBLE::show_all_services);
     ClassDB::bind_method(D_METHOD("read_data_from_service","index"), &GodotBLE::read_data_from_service,DEFVAL(0));
     ClassDB::bind_method(D_METHOD("write_data_to_service","index","data"), &GodotBLE::write_data_to_service);
-    ADD_SIGNAL(MethodInfo("on_device_found", PropertyInfo(Variant::STRING, "identifier"), PropertyInfo(Variant::STRING, "address")));
-    ADD_SIGNAL(MethodInfo("on_device_update", PropertyInfo(Variant::STRING, "identifier"), PropertyInfo(Variant::STRING, "address")));
+    ADD_SIGNAL(MethodInfo("device_found", PropertyInfo(Variant::STRING, "identifier"), PropertyInfo(Variant::STRING, "address")));
+    ADD_SIGNAL(MethodInfo("device_update", PropertyInfo(Variant::STRING, "identifier"), PropertyInfo(Variant::STRING, "address")));
+    ADD_SIGNAL(MethodInfo("scan_start"));
+    ADD_SIGNAL(MethodInfo("scan_stop"));
 }   
 
 GodotBLE::GodotBLE() {

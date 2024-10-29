@@ -56,6 +56,8 @@ protected:
 	
 	void emit_found_signal(SimpleBLE::Peripheral peripheral);
 	void emit_update_signal(SimpleBLE::Peripheral peripheral);
+	void emit_scan_stop();
+	void emit_scan_start();
 	std::string godot_string_to_cpp_string(String godot_string);
 
 public:
