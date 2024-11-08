@@ -6,7 +6,6 @@ compatibility_minimum = "4.4"
 windows.debug.x86_64 = "res://bin/windows/libgdble.windows.template_debug.x86_64.dll"
 
 [dependencies]
-
 windows.debug = {
     "res://bin/simpleble.dll" : "",
     "res://bin/simpleble-c.dll" : ""
@@ -15,3 +14,6 @@ windows.release = {
     "res://bin/simpleble.dll" : "",
     "res://bin/simpleble-c.dll" : ""
 }
+
+[icons]
+GodotBLE = "res://bin/bluetooth.svg"

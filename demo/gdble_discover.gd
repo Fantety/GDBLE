@@ -14,7 +14,7 @@ func _process(delta: float) -> void:
 	pass
 
 
-func _on_on_device_found(identifier: String, address: String) -> void:
+func _on_device_found(identifier: String, address: String) -> void:
 	print(identifier,'\t',address)
 	if identifier=='ESP32':
 		stop_scan()

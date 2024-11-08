@@ -21,7 +21,7 @@ offset_bottom = 414.0
 theme_override_font_sizes/font_size = 50
 text = "180"
 
-[connection signal="on_device_found" from="." to="." method="_on_on_device_found"]
+[connection signal="device_found" from="." to="." method="_on_device_found"]
 [connection signal="start_write" from="." to="." method="_on_start_write"]
 [connection signal="pressed" from="Button" to="." method="_on_button_pressed"]
 [connection signal="pressed" from="Button2" to="." method="_on_button_2_pressed"]
