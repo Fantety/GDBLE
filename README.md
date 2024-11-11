@@ -44,13 +44,12 @@ gdextension文件内容参考
 ```ini
 [configuration]
 entry_symbol = "gdble_library_init"
-compatibility_minimum = "4.1"
+compatibility_minimum = "4.4"
 
 [libraries]
 windows.debug.x86_64 = "res://bin/windows/libgdble.windows.template_debug.x86_64.dll"
 
 [dependencies]
-
 windows.debug = {
     "res://bin/simpleble.dll" : "",
     "res://bin/simpleble-c.dll" : ""
@@ -59,6 +58,9 @@ windows.release = {
     "res://bin/simpleble.dll" : "",
     "res://bin/simpleble-c.dll" : ""
 }
+
+[icons]
+GodotBLE = "./bluetooth.svg"
 ```
 
 可以看到上面的内容包含了三个dll文件，按照gdextension文件所写的路径把这三个文件放到正确的地方就好了。

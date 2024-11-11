@@ -16,4 +16,4 @@ windows.release = {
 }
 
 [icons]
-GodotBLE = "res://bin/bluetooth.svg"
+GodotBLE = "./bluetooth.svg"
