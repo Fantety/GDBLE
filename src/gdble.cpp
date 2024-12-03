@@ -4,7 +4,7 @@
  * @Descripttion: 
  * @Date: 2024-08-28 09:20:10
  * @LastEditors: Fantety
- * @LastEditTime: 2024-10-29 09:27:56
+ * @LastEditTime: 2024-12-03 08:43:23
  */
 /* godot-cpp integration testing project.
  *
@@ -199,6 +199,15 @@ int GodotBLE::write_data_to_service(int index, String data){
     }
     return -3;
 }
+int GodotBLE::subscribe_notify(int index){
+    if(!current_device->is_connected()){
+        return -1;
+    }
+    if(index<0 || index>= uuids.size())
+        return -2;
+    current_device->notify(uuids[index].first, uuids[index].second,
+        std::bind(&GodotBLE::emit_notified, this, std::placeholders::_1));
+}
 
 void GodotBLE::emit_found_signal(SimpleBLE::Peripheral peripheral){
     devices.push_back(peripheral);
@@ -218,6 +227,10 @@ void GodotBLE::emit_scan_start(){
     call_deferred("emit_signal", "scan_start");
     //emit_signal("scan_start");
 }
+void GodotBLE::emit_notified(SimpleBLE::ByteArray bytes){
+    call_deferred("emit_signal", "notified",String{bytes.c_str()});
+}
+
 
 void GodotBLE::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("bluetooth_enabled"), &GodotBLE::bluetooth_enabled);
@@ -238,6 +251,7 @@ void GodotBLE::_bind_methods() {
     ADD_SIGNAL(MethodInfo("device_update", PropertyInfo(Variant::STRING, "identifier"), PropertyInfo(Variant::STRING, "address")));
     ADD_SIGNAL(MethodInfo("scan_start"));
     ADD_SIGNAL(MethodInfo("scan_stop"));
+    ADD_SIGNAL(MethodInfo("notified", PropertyInfo(Variant::STRING, "data")));
 }   
 
 GodotBLE::GodotBLE() {

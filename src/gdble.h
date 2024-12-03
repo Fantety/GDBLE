@@ -4,7 +4,7 @@
  * @Descripttion: 
  * @Date: 2024-08-28 09:20:26
  * @LastEditors: Fantety
- * @LastEditTime: 2024-10-28 13:39:50
+ * @LastEditTime: 2024-12-03 08:26:22
  */
 /* godot-cpp integration testing project.
  *
@@ -58,6 +58,7 @@ protected:
 	void emit_update_signal(SimpleBLE::Peripheral peripheral);
 	void emit_scan_stop();
 	void emit_scan_start();
+	void emit_notified(SimpleBLE::ByteArray bytes);
 	std::string godot_string_to_cpp_string(String godot_string);
 
 public:
@@ -80,6 +81,8 @@ public:
 	Dictionary show_all_services();
 	String read_data_from_service(int index);
 	int write_data_to_service(int index, String data);
+	int subscribe_notify(int index);
+	int unsubscribe_notify(int index);
 };
 
 #endif // EXAMPLE_CLASS_H
