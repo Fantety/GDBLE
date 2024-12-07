@@ -4,7 +4,7 @@
  * @Descripttion: 
  * @Date: 2024-08-28 09:20:10
  * @LastEditors: Fantety
- * @LastEditTime: 2024-12-03 08:43:23
+ * @LastEditTime: 2024-12-07 11:01:49
  */
 /* godot-cpp integration testing project.
  *
@@ -247,6 +247,7 @@ void GodotBLE::_bind_methods() {
     ClassDB::bind_method(D_METHOD("show_all_services"), &GodotBLE::show_all_services);
     ClassDB::bind_method(D_METHOD("read_data_from_service","index"), &GodotBLE::read_data_from_service,DEFVAL(0));
     ClassDB::bind_method(D_METHOD("write_data_to_service","index","data"), &GodotBLE::write_data_to_service);
+    ClassDB::bind_method(D_METHOD("subscribe_notify","index"), &GodotBLE::subscribe_notify);
     ADD_SIGNAL(MethodInfo("device_found", PropertyInfo(Variant::STRING, "identifier"), PropertyInfo(Variant::STRING, "address")));
     ADD_SIGNAL(MethodInfo("device_update", PropertyInfo(Variant::STRING, "identifier"), PropertyInfo(Variant::STRING, "address")));
     ADD_SIGNAL(MethodInfo("scan_start"));
