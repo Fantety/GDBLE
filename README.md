@@ -9,6 +9,10 @@
     <img alt="GitHub language count" src="https://img.shields.io/github/languages/count/Fantety/GodotBLE">
   </p>
   <p><i>一个为 Godot 4 开发的现代化低功耗蓝牙（BLE）插件</i></p>
+  <p>
+    <a href="README.md">🇨🇳 中文</a> | 
+    <a href="README_EN.md">🇺🇸 English</a>
+  </p>
 </div>
 
 ---
@@ -689,21 +693,6 @@ func _on_characteristic_read(char_uuid: String, data: PackedByteArray):
 
 ---
 
-## 标准 BLE 服务 UUID
-
-以下是一些常用的标准 BLE 服务 UUID：
-
-| 服务名称 | UUID | 描述 |
-|---------|------|------|
-| Heart Rate | `0000180d-0000-1000-8000-00805f9b34fb` | 心率监测 |
-| Battery Service | `0000180f-0000-1000-8000-00805f9b34fb` | 电池电量 |
-| Device Information | `0000180a-0000-1000-8000-00805f9b34fb` | 设备信息 |
-| Generic Access | `00001800-0000-1000-8000-00805f9b34fb` | 通用访问 |
-| Generic Attribute | `00001801-0000-1000-8000-00805f9b34fb` | 通用属性 |
-
-完整列表请参考：[Bluetooth SIG Assigned Numbers](https://www.bluetooth.com/specifications/assigned-numbers/)
-
----
 
 ## 性能优化建议
 
