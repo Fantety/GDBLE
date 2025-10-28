@@ -24,28 +24,34 @@ macro_rules! ble_debug {
     };
 }
 
-/// 信息日志宏
+/// 信息日志宏 - 仅在调试模式下输出
 #[macro_export]
 macro_rules! ble_info {
-    ($($arg:tt)*) => {{
-        godot::prelude::godot_print!("[BLE Info] {}", format!($($arg)*))
-    }};
+    ($($arg:tt)*) => {
+        if $crate::types::is_debug_mode() {
+            godot::prelude::godot_print!("[BLE Info] {}", format!($($arg)*));
+        }
+    };
 }
 
-/// 警告日志宏
+/// 警告日志宏 - 仅在调试模式下输出
 #[macro_export]
 macro_rules! ble_warn {
-    ($($arg:tt)*) => {{
-        godot::prelude::godot_warn!("[BLE Warning] {}", format!($($arg)*))
-    }};
+    ($($arg:tt)*) => {
+        if $crate::types::is_debug_mode() {
+            godot::prelude::godot_warn!("[BLE Warning] {}", format!($($arg)*));
+        }
+    };
 }
 
-/// 错误日志宏
+/// 错误日志宏 - 仅在调试模式下输出
 #[macro_export]
 macro_rules! ble_error {
-    ($($arg:tt)*) => {{
-        godot::prelude::godot_error!("[BLE Error] {}", format!($($arg)*))
-    }};
+    ($($arg:tt)*) => {
+        if $crate::types::is_debug_mode() {
+            godot::prelude::godot_error!("[BLE Error] {}", format!($($arg)*));
+        }
+    };
 }
 
 /// 设备信息结构

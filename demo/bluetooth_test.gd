@@ -197,8 +197,11 @@ func _on_services_discovered(services: Array):
 			print("      Can Notify: ", properties.get("notify", false))
 			print("      Can Indicate: ", properties.get("indicate", false))
 	
-	# 查找fff2特征并写入数据 - 重点查找fff0服务下的fff2特征
-	var target_char_found = false
+	# 查找fff0服务并处理其特征
+	var fff0_service_found = false
+	var fff1_subscribed = false
+	var fff2_written = false
+	
 	for service in services:
 		var service_uuid = service.get("uuid", "")
 		var characteristics = service.get("characteristics", [])
@@ -207,44 +210,48 @@ func _on_services_discovered(services: Array):
 		
 		# 检查是否是fff0服务（UUID格式：0000fff0-0000-1000-8000-00805f9b34fb）
 		if service_uuid == "0000fff0-0000-1000-8000-00805f9b34fb":
-			print("\nFound fff0 service: ", service_uuid)
+			print("\n=== Found fff0 service: ", service_uuid, " ===")
+			fff0_service_found = true
+			
 			for characteristic in characteristics:
 				var char_uuid = characteristic.get("uuid", "")
 				var properties = characteristic.get("properties", {})
 				print("  Checking characteristic: ", char_uuid)
 				
-				# 在fff0服务下查找fff2特征
-				if char_uuid == "0000fff2-0000-1000-8000-00805f9b34fb":
-					print("  Found fff2 characteristic in fff0 service: ", char_uuid)
-					if properties.get("write", false):
+				# 订阅 fff1 特征的通知
+				if char_uuid == "0000fff1-0000-1000-8000-00805f9b34fb":
+					print("  Found fff1 characteristic: ", char_uuid)
+					if properties.get("notify", false):
+						print("  Subscribing to fff1 notifications...")
+						subscribe_characteristic_example(service_uuid, char_uuid)
+						fff1_subscribed = true
+					else:
+						print("  Warning: fff1 does not support notifications")
+				
+				# 写入数据到 fff2 特征
+				elif char_uuid == "0000fff2-0000-1000-8000-00805f9b34fb":
+					print("  Found fff2 characteristic: ", char_uuid)
+					if properties.get("write", false) or properties.get("write_without_response", false):
 						# 写入字符串 "hello gdble"
 						var test_string = "hello gdble"
 						var test_data = test_string.to_utf8_buffer()
-						print("  Writing string '", test_string, "' to fff2 characteristic: ", char_uuid)
+						print("  Writing string '", test_string, "' to fff2 characteristic")
 						write_characteristic_example(service_uuid, char_uuid, test_data, false)
-						target_char_found = true
+						fff2_written = true
 					else:
-						print("  Characteristic fff2 does not support write operations")
-					break
-		
-		if target_char_found:
+						print("  Warning: fff2 does not support write operations")
+			
+			# 找到 fff0 服务后就退出循环
 			break
 	
-	# 如果没找到fff2特征，写入数据到第一个可写特征
-	if not target_char_found:
-		print("\nSearching for first writable characteristic...")
-		for service in services:
-			var service_uuid = service.get("uuid", "")
-			var characteristics = service.get("characteristics", [])
-			for characteristic in characteristics:
-				var char_uuid = characteristic.get("uuid", "")
-				var properties = characteristic.get("properties", {})
-				if properties.get("write", false):
-					print("\nWriting string 'hello gdble' to first available writable characteristic: ", char_uuid)
-					var test_string = "hello gdble"
-					var test_data = test_string.to_utf8_buffer()
-					write_characteristic_example(service_uuid, char_uuid, test_data, false)
-					return
+	# 输出操作结果摘要
+	if fff0_service_found:
+		print("\n=== fff0 Service Operations Summary ===")
+		print("  fff1 notification subscribed: ", fff1_subscribed)
+		print("  fff2 data written: ", fff2_written)
+	else:
+		print("\nWarning: fff0 service not found")
+
 
 func _on_characteristic_read(char_uuid: String, data: PackedByteArray):
 	print("\nCharacteristic read:")
@@ -257,10 +264,19 @@ func _on_characteristic_written(char_uuid: String):
 	print("  UUID: ", char_uuid)
 
 func _on_characteristic_notified(char_uuid: String, data: PackedByteArray):
-	print("\nCharacteristic notification received:")
+	print("\n=== Characteristic Notification Received ===")
 	print("  UUID: ", char_uuid)
 	print("  Data length: ", data.size())
 	print("  Data (hex): ", data.hex_encode())
+	
+	# 尝试将数据解析为字符串
+	var data_string = data.get_string_from_utf8()
+	if data_string != "":
+		print("  Data (string): ", data_string)
+	
+	# 特别标记来自 fff1 的通知
+	if char_uuid.to_lower() == "0000fff1-0000-1000-8000-00805f9b34fb":
+		print("  >>> This is from fff1 characteristic! <<<")
 
 func _on_operation_failed(operation: String, error: String):
 	print("\nOperation failed:")
