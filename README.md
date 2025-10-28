@@ -1,7 +1,7 @@
 <div align="center">
   <h1>GDBLE - Godot Bluetooth Low Energy Plugin</h1>
 <p>
-<img src="GodotBLEx457.png"/>
+<img src="GodotBLEx229.png"/>
 </p>
 <p>
     <img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/Fantety/GDBLE/builds.yml">
