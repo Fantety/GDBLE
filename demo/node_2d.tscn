@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://jjnacs273m46"]
+
+[ext_resource type="Script" uid="uid://8agqc7fvopfi" path="res://bluetooth_test.gd" id="1_wtcfe"]
+
+[node name="Node2D" type="Node2D"]
+script = ExtResource("1_wtcfe")
