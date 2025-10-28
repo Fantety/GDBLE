@@ -15,9 +15,6 @@
     <a href="README_EN.md">🇺🇸 English</a>
   </p>
 </div>
-
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Fantety/GDBLE/release.yml)
-
 ---
 
 ## 📖 目录
