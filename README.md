@@ -1,12 +1,12 @@
 <div align="center">
   <h1>GDBLE - Godot Bluetooth Low Energy Plugin</h1>
 <p>
-<img src="https://img.picui.cn/free/2024/10/28/671f1110963c8.png"/>
+<img src="GodotBLEx457.png"/>
 </p>
 <p>
-    <img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/Fantety/GodotBLE/builds.yml">
-    <img alt="GitHub code size in bytes" src="https://img.shields.io/github/languages/code-size/Fantety/GodotBLE">
-    <img alt="GitHub language count" src="https://img.shields.io/github/languages/count/Fantety/GodotBLE">
+    <img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/Fantety/GDBLE/builds.yml">
+    <img alt="GitHub code size in bytes" src="https://img.shields.io/github/languages/code-size/Fantety/GDBLE">
+    <img alt="GitHub language count" src="https://img.shields.io/github/languages/count/Fantety/GDBLE">
   </p>
   <p><i>一个为 Godot 4 开发的现代化低功耗蓝牙（BLE）插件</i></p>
   <p>
