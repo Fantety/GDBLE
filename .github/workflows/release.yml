@@ -1,0 +1,231 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: gdble.dll
+            artifact_path: target/release/gdble.dll
+          
+          - platform: macos
+            os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: libgdble.dylib
+            artifact_path: target/release/libgdble.dylib
+          
+          - platform: macos-arm
+            os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: libgdble.dylib
+            artifact_path: target/release/libgdble.dylib
+          
+          # - platform: linux
+          #   os: ubuntu-latest
+          #   target: x86_64-unknown-linux-gnu
+          #   artifact_name: libgdble.so
+          #   artifact_path: target/release/libgdble.so
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-${{ matrix.target }}-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          mkdir -p artifacts/${{ matrix.platform }}
+          cp ${{ matrix.artifact_path }} artifacts/${{ matrix.platform }}/${{ matrix.artifact_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdble-${{ matrix.platform }}
+          path: artifacts/${{ matrix.platform }}/${{ matrix.artifact_name }}
+          retention-days: 7
+
+  package:
+    name: Package Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release package
+        run: |
+          mkdir -p release/addons/gdble
+          
+          # Copy gdextension file
+          cp demo/addons/gdble/gdble.gdextension release/addons/gdble/
+          
+          # Copy Windows binary
+          if [ -f artifacts/gdble-windows/gdble.dll ]; then
+            cp artifacts/gdble-windows/gdble.dll release/addons/gdble/
+          fi
+          
+          # Copy macOS x86_64 binary
+          if [ -f artifacts/gdble-macos/libgdble.dylib ]; then
+            cp artifacts/gdble-macos/libgdble.dylib release/addons/gdble/libgdble.x86_64.dylib
+          fi
+          
+          # Copy macOS ARM binary
+          if [ -f artifacts/gdble-macos-arm/libgdble.dylib ]; then
+            cp artifacts/gdble-macos-arm/libgdble.dylib release/addons/gdble/libgdble.arm64.dylib
+          fi
+          
+          # Create universal macOS binary if both architectures exist
+          if [ -f release/addons/gdble/libgdble.x86_64.dylib ] && [ -f release/addons/gdble/libgdble.arm64.dylib ]; then
+            lipo -create \
+              release/addons/gdble/libgdble.x86_64.dylib \
+              release/addons/gdble/libgdble.arm64.dylib \
+              -output release/addons/gdble/libgdble.dylib
+            rm release/addons/gdble/libgdble.x86_64.dylib
+            rm release/addons/gdble/libgdble.arm64.dylib
+          elif [ -f release/addons/gdble/libgdble.x86_64.dylib ]; then
+            mv release/addons/gdble/libgdble.x86_64.dylib release/addons/gdble/libgdble.dylib
+          elif [ -f release/addons/gdble/libgdble.arm64.dylib ]; then
+            mv release/addons/gdble/libgdble.arm64.dylib release/addons/gdble/libgdble.dylib
+          fi
+          
+          # Copy documentation
+          cp README.md release/
+          cp README_EN.md release/
+          cp LICENSE release/ 2>/dev/null || echo "No LICENSE file found"
+          
+          # Create zip archive
+          cd release
+          zip -r ../gdble-release.zip .
+          cd ..
+          
+          # List contents
+          echo "Release package contents:"
+          unzip -l gdble-release.zip
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdble-release-package
+          path: gdble-release.zip
+          retention-days: 30
+
+  release:
+    name: Create GitHub Release
+    needs: package
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download release package
+        uses: actions/download-artifact@v4
+        with:
+          name: gdble-release-package
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: GDBLE ${{ steps.get_version.outputs.version }}
+          draft: false
+          prerelease: false
+          files: |
+            gdble-release.zip
+          body: |
+            # GDBLE ${{ steps.get_version.outputs.version }}
+            
+            ## 🎉 Release Notes
+            
+            A modern Bluetooth Low Energy (BLE) plugin for Godot 4.
+            
+            ## 📦 Installation
+            
+            1. Download `gdble-release.zip`
+            2. Extract to your Godot project's `addons` folder
+            3. Restart Godot Editor
+            
+            ## 🌍 Platform Support
+            
+            - ✅ Windows 10+
+            - ✅ macOS 10.15+ (Universal Binary: x86_64 + ARM64)
+            - 🚧 Linux (In Development)
+            
+            ## 📚 Documentation
+            
+            - [中文文档](README.md)
+            - [English Documentation](README_EN.md)
+            
+            ## 🔗 Links
+            
+            - [GitHub Repository](https://github.com/Fantety/GodotBLE)
+            - [Godot Asset Library](https://godotengine.org/asset-library/asset/3439)
+            - [Report Issues](https://github.com/Fantety/GodotBLE/issues)
+            
+            ---
+            
+            **Full Changelog**: https://github.com/Fantety/GodotBLE/compare/${{ steps.get_version.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
