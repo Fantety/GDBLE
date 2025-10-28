@@ -26,19 +26,16 @@ jobs:
             os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: gdble.dll
-            artifact_path: target/release/gdble.dll
           
           - platform: macos
             os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: libgdble.dylib
-            artifact_path: target/release/libgdble.dylib
           
           - platform: macos-arm
             os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: libgdble.dylib
-            artifact_path: target/release/libgdble.dylib
           
           # - platform: linux
           #   os: ubuntu-latest
@@ -81,7 +78,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts/${{ matrix.platform }}
-          cp ${{ matrix.artifact_path }} artifacts/${{ matrix.platform }}/${{ matrix.artifact_name }}
+          # Copy from target-specific directory
+          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} artifacts/${{ matrix.platform }}/${{ matrix.artifact_name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
