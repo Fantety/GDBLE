@@ -7,6 +7,7 @@
     <img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/Fantety/GDBLE/release.yml">
     <img alt="GitHub code size in bytes" src="https://img.shields.io/github/languages/code-size/Fantety/GDBLE">
     <img alt="GitHub language count" src="https://img.shields.io/github/languages/count/Fantety/GDBLE">
+    <img alt="GitHub License" src="https://img.shields.io/github/license/Fantety/GDBLE">
   </p>
   <p><i>一个为 Godot 4 开发的现代化低功耗蓝牙（BLE）插件</i></p>
   <p>
@@ -14,6 +15,8 @@
     <a href="README_EN.md">🇺🇸 English</a>
   </p>
 </div>
+
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Fantety/GDBLE/release.yml)
 
 ---
 

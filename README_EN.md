@@ -7,6 +7,7 @@
     <img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/Fantety/GDBLE/release.yml">
     <img alt="GitHub code size in bytes" src="https://img.shields.io/github/languages/code-size/Fantety/GDBLE">
     <img alt="GitHub language count" src="https://img.shields.io/github/languages/count/Fantety/GDBLE">
+    <img alt="GitHub License" src="https://img.shields.io/github/license/Fantety/GDBLE">
   </p>
   <p><i>A modern Bluetooth Low Energy (BLE) plugin for Godot 4</i></p>
   <p>
