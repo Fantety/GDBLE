@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 /// RuntimeManager manages the Tokio async runtime for executing BLE operations
-/// 
+///
 /// This struct provides a centralized way to manage the Tokio runtime lifecycle
 /// and execute async tasks. It ensures that all async operations use the same
 /// runtime instance, preventing resource conflicts.
@@ -12,10 +12,10 @@ pub struct RuntimeManager {
 
 impl RuntimeManager {
     /// Creates a new RuntimeManager with a multi-threaded Tokio runtime
-    /// 
+    ///
     /// # Returns
     /// A new RuntimeManager instance with an initialized runtime
-    /// 
+    ///
     /// # Panics
     /// Panics if the Tokio runtime cannot be created
     pub fn new() -> Self {
@@ -26,10 +26,10 @@ impl RuntimeManager {
     }
 
     /// Returns a cloned Arc reference to the underlying Tokio runtime
-    /// 
+    ///
     /// This allows sharing the runtime across multiple components while
     /// maintaining thread safety through Arc's reference counting.
-    /// 
+    ///
     /// # Returns
     /// An Arc-wrapped reference to the Runtime
     pub fn runtime(&self) -> Arc<Runtime> {
@@ -37,13 +37,13 @@ impl RuntimeManager {
     }
 
     /// Spawns an async task on the runtime
-    /// 
+    ///
     /// This method schedules a future to run on the Tokio runtime's thread pool.
     /// The task runs independently and its result is not directly returned.
-    /// 
+    ///
     /// # Type Parameters
     /// * `F` - A Future that is Send and has a 'static lifetime
-    /// 
+    ///
     /// # Parameters
     /// * `future` - The async task to execute
     pub fn spawn<F>(&self, future: F)
@@ -51,20 +51,20 @@ impl RuntimeManager {
         F: std::future::Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        self.runtime.spawn(future);
+        let _ = self.runtime.spawn(future);
     }
 
     /// Blocks the current thread until the future completes
-    /// 
+    ///
     /// This method should be used sparingly as it blocks the calling thread.
     /// Prefer using spawn() for non-blocking execution when possible.
-    /// 
+    ///
     /// # Type Parameters
     /// * `F` - A Future type
-    /// 
+    ///
     /// # Parameters
     /// * `future` - The async task to execute and wait for
-    /// 
+    ///
     /// # Returns
     /// The output of the completed future
     pub fn block_on<F>(&self, future: F) -> F::Output
@@ -97,7 +97,7 @@ mod tests {
         let manager = RuntimeManager::new();
         let runtime1 = manager.runtime();
         let runtime2 = manager.runtime();
-        
+
         // Both should point to the same runtime
         assert!(Arc::ptr_eq(&runtime1, &runtime2));
     }
@@ -120,10 +120,8 @@ mod tests {
     #[test]
     fn test_block_on_execution() {
         let manager = RuntimeManager::new();
-        
-        let result = manager.block_on(async {
-            42
-        });
+
+        let result = manager.block_on(async { 42 });
 
         assert_eq!(result, 42);
     }
@@ -131,7 +129,7 @@ mod tests {
     #[test]
     fn test_block_on_with_computation() {
         let manager = RuntimeManager::new();
-        
+
         let result = manager.block_on(async {
             let mut sum = 0;
             for i in 1..=10 {

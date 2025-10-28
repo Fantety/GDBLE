@@ -379,13 +379,13 @@ impl BluetoothManager {
         let (tx, rx) = mpsc::unbounded_channel();
         self.scan_result_rx = Some(Arc::new(Mutex::new(rx)));
 
-        // Execute scan task synchronously to ensure it runs
+        // Execute scan task asynchronously
         if let Some(ref runtime_mgr) = self.runtime {
-            ble_debug!("Executing scan task synchronously");
-            let scan_result = runtime_mgr.block_on(async move {
+            ble_debug!("Spawning scan task asynchronously");
+            runtime_mgr.spawn(async move {
                 ble_debug!("Scan task started");
                 ble_debug!("About to call scanner.start_scan()");
-                match scanner.start_scan(duration).await {
+                let scan_result = match scanner.start_scan(duration).await {
                     Ok(()) => {
                         ble_debug!("scanner.start_scan() returned Ok");
                         let devices = scanner.get_devices();
@@ -398,16 +398,16 @@ impl BluetoothManager {
                         e.log_error();
                         Err(e.to_string())
                     }
+                };
+                
+                ble_debug!("Scan task completed, sending result through channel");
+                // Send result through channel
+                if tx.send(scan_result).is_err() {
+                    ble_error!("Failed to send scan results through channel");
+                } else {
+                    ble_debug!("Result sent through channel successfully");
                 }
             });
-            
-            ble_debug!("Scan task executed, sending result through channel");
-            // Send result through channel
-            if tx.send(scan_result).is_err() {
-                ble_error!("Failed to send scan results through channel");
-            } else {
-                ble_debug!("Result sent through channel successfully");
-            }
         } else {
             let error = BleError::InternalError("Runtime not available".to_string());
             error.log_error();

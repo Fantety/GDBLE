@@ -112,11 +112,11 @@ impl BleDevice {
         // Get instance ID for callback
         let instance_id = self.base().instance_id();
 
-        // Execute connection synchronously using block_on
-        let result = runtime.block_on(async {
+        // Execute connection asynchronously
+        runtime.spawn(async move {
             ble_debug!("About to call peripheral.connect() for {}", address);
             
-            match peripheral.connect().await {
+            let result = match peripheral.connect().await {
                 Ok(_) => {
                     ble_debug!("peripheral.connect() returned Ok for {}", address);
                     *is_connected.lock().unwrap() = true;
@@ -127,35 +127,35 @@ impl BleDevice {
                     ble_debug!("peripheral.connect() returned Err for {}: {}", address, e);
                     Err(BleError::ConnectionFailed(e.to_string()))
                 }
+            };
+
+            // Handle result on main thread
+            match result {
+                Ok(_) => {
+                    ble_debug!("Attempting to emit connected signal for {}", address);
+                    if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id) {
+                        ble_debug!("Found device instance, calling _on_connect_success");
+                        obj.call_deferred("_on_connect_success", &[]);
+                    } else {
+                        ble_error!("Failed to get device instance for callback");
+                    }
+                }
+                Err(error) => {
+                    ble_debug!("Connection failed for device: {}", address);
+                    error.log_error();
+                    
+                    if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id) {
+                        ble_debug!("Found device instance, calling _on_connect_failed");
+                        obj.call_deferred(
+                            "_on_connect_failed",
+                            &[error.to_gstring().to_variant()],
+                        );
+                    } else {
+                        ble_error!("Failed to get device instance for error callback");
+                    }
+                }
             }
         });
-
-        // Handle result on main thread
-        match result {
-            Ok(_) => {
-                ble_debug!("Attempting to emit connected signal for {}", address);
-                if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id) {
-                    ble_debug!("Found device instance, calling _on_connect_success");
-                    obj.call_deferred("_on_connect_success", &[]);
-                } else {
-                    ble_error!("Failed to get device instance for callback");
-                }
-            }
-            Err(error) => {
-                ble_debug!("Connection failed for device: {}", address);
-                error.log_error();
-                
-                if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id) {
-                    ble_debug!("Found device instance, calling _on_connect_failed");
-                    obj.call_deferred(
-                        "_on_connect_failed",
-                        &[error.to_gstring().to_variant()],
-                    );
-                } else {
-                    ble_error!("Failed to get device instance for error callback");
-                }
-            }
-        }
     }
 
     /// Disconnect from the device
@@ -258,87 +258,87 @@ impl BleDevice {
         let services_cache = self.services.clone();
         let instance_id = self.base().instance_id();
 
-        // Execute service discovery synchronously using block_on
-        let result = runtime.block_on(async {
+        // Execute service discovery asynchronously
+        runtime.spawn(async move {
             ble_debug!("About to call peripheral.discover_services() for {}", address);
             
-            match peripheral.discover_services().await {
+            let result = match peripheral.discover_services().await {
                 Ok(_) => {
                     Ok(())
                 }
                 Err(e) => {
                     Err(BleError::ServiceDiscoveryFailed(e.to_string()))
                 }
+            };
+
+            // Handle result on main thread
+            match result {
+                Ok(_) => {
+                    ble_debug!("Service discovery successful for device: {}", address);
+                    
+                    // Get all services
+                    let services = peripheral.services();
+                    let mut service_infos = Vec::new();
+
+                    for service in services {
+                        let char_count = service.characteristics.len();
+                        ble_debug!(
+                            "Found service {} with {} characteristics",
+                            service.uuid,
+                            char_count
+                        );
+
+                        let char_infos: Vec<BleCharacteristicInfo> = service
+                            .characteristics
+                            .iter()
+                            .map(|c| Self::convert_characteristic(c))
+                            .collect();
+                        let service_info =
+                            BleServiceInfo::new(service.uuid.to_string(), char_infos);
+                        service_infos.push(service_info);
+                    }
+
+                    ble_info!(
+                        "Service discovery complete for device {}: found {} services",
+                        address,
+                        service_infos.len()
+                    );
+
+                    // Cache the services
+                    *services_cache.lock().unwrap() = service_infos.clone();
+
+                    // Convert to array of dictionaries
+                    let services_array: Array<Dictionary> =
+                        service_infos.iter().map(|s| s.to_dictionary()).collect();
+
+                    // Emit signal on main thread
+                    if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id) {
+                        obj.call_deferred(
+                            "_on_services_discovered",
+                            &[services_array.to_variant()],
+                        );
+                    } else {
+                        ble_error!("Failed to get device instance for services_discovered callback");
+                    }
+                }
+                Err(error) => {
+                    error.log_error();
+
+                    // Call back to main thread to emit signal
+                    if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id) {
+                        obj.call_deferred(
+                            "_on_operation_failed",
+                            &[
+                                GString::from("discover_services").to_variant(),
+                                error.to_gstring().to_variant(),
+                            ],
+                        );
+                    } else {
+                        ble_error!("Failed to get device instance for error callback");
+                    }
+                }
             }
         });
-
-        // Handle result on main thread
-        match result {
-            Ok(_) => {
-                ble_debug!("Service discovery successful for device: {}", address);
-                
-                // Get all services
-                let services = peripheral.services();
-                let mut service_infos = Vec::new();
-
-                for service in services {
-                    let char_count = service.characteristics.len();
-                    ble_debug!(
-                        "Found service {} with {} characteristics",
-                        service.uuid,
-                        char_count
-                    );
-
-                    let char_infos: Vec<BleCharacteristicInfo> = service
-                        .characteristics
-                        .iter()
-                        .map(|c| Self::convert_characteristic(c))
-                        .collect();
-                    let service_info =
-                        BleServiceInfo::new(service.uuid.to_string(), char_infos);
-                    service_infos.push(service_info);
-                }
-
-                ble_info!(
-                    "Service discovery complete for device {}: found {} services",
-                    address,
-                    service_infos.len()
-                );
-
-                // Cache the services
-                *services_cache.lock().unwrap() = service_infos.clone();
-
-                // Convert to array of dictionaries
-                let services_array: Array<Dictionary> =
-                    service_infos.iter().map(|s| s.to_dictionary()).collect();
-
-                // Emit signal on main thread
-                if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id) {
-                    obj.call_deferred(
-                        "_on_services_discovered",
-                        &[services_array.to_variant()],
-                    );
-                } else {
-                    ble_error!("Failed to get device instance for services_discovered callback");
-                }
-            }
-            Err(error) => {
-                error.log_error();
-
-                // Call back to main thread to emit signal
-                if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id) {
-                    obj.call_deferred(
-                        "_on_operation_failed",
-                        &[
-                            GString::from("discover_services").to_variant(),
-                            error.to_gstring().to_variant(),
-                        ],
-                    );
-                } else {
-                    ble_error!("Failed to get device instance for error callback");
-                }
-            }
-        }
     }
 
     /// Get the list of discovered services
@@ -407,57 +407,58 @@ impl BleDevice {
         match characteristic {
             Some(char) => {
                 ble_debug!("Found characteristic {}, reading value", char_uuid_str);
+                let char_clone = char.clone();
                 
-                // Execute read synchronously using block_on
-                let result = runtime.block_on(async {
-                    peripheral.read(char).await
+                // Execute read asynchronously
+                runtime.spawn(async move {
+                    let result = peripheral.read(&char_clone).await;
+
+                    match result {
+                        Ok(data) => {
+                            ble_info!(
+                                "Successfully read {} bytes from characteristic {}",
+                                data.len(),
+                                char_uuid_str
+                            );
+                            ble_debug!("Read data: {:?}", data);
+
+                            // Convert Vec<u8> to PackedByteArray
+                            let packed_data = PackedByteArray::from(&data[..]);
+
+                            // Call back to main thread to emit signal
+                            if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id)
+                            {
+                                obj.call_deferred(
+                                    "_on_characteristic_read",
+                                    &[
+                                        GString::from(&char_uuid_str).to_variant(),
+                                        packed_data.to_variant(),
+                                    ],
+                                );
+                            } else {
+                                ble_error!("Failed to get device instance for read callback");
+                            }
+                        }
+                        Err(e) => {
+                            let error = BleError::ReadFailed(e.to_string());
+                            error.log_error();
+
+                            // Call back to main thread to emit signal
+                            if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id)
+                            {
+                                obj.call_deferred(
+                                    "_on_operation_failed",
+                                    &[
+                                        GString::from("read_characteristic").to_variant(),
+                                        error.to_gstring().to_variant(),
+                                    ],
+                                );
+                            } else {
+                                ble_error!("Failed to get device instance for error callback");
+                            }
+                        }
+                    }
                 });
-
-                match result {
-                    Ok(data) => {
-                        ble_info!(
-                            "Successfully read {} bytes from characteristic {}",
-                            data.len(),
-                            char_uuid_str
-                        );
-                        ble_debug!("Read data: {:?}", data);
-
-                        // Convert Vec<u8> to PackedByteArray
-                        let packed_data = PackedByteArray::from(&data[..]);
-
-                        // Call back to main thread to emit signal
-                        if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id)
-                        {
-                            obj.call_deferred(
-                                "_on_characteristic_read",
-                                &[
-                                    GString::from(&char_uuid_str).to_variant(),
-                                    packed_data.to_variant(),
-                                ],
-                            );
-                        } else {
-                            ble_error!("Failed to get device instance for read callback");
-                        }
-                    }
-                    Err(e) => {
-                        let error = BleError::ReadFailed(e.to_string());
-                        error.log_error();
-
-                        // Call back to main thread to emit signal
-                        if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id)
-                        {
-                            obj.call_deferred(
-                                "_on_operation_failed",
-                                &[
-                                    GString::from("read_characteristic").to_variant(),
-                                    error.to_gstring().to_variant(),
-                                ],
-                            );
-                        } else {
-                            ble_error!("Failed to get device instance for error callback");
-                        }
-                    }
-                }
             }
             None => {
                 let error = BleError::CharacteristicNotFound(format!(
@@ -550,59 +551,60 @@ impl BleDevice {
             Some(char) => {
                 ble_debug!("Found characteristic {}, writing data", char_uuid_str);
                 ble_debug!("Write data: {:?}", data_vec);
+                let char_clone = char.clone();
 
-                // Execute write synchronously using block_on
-                let result = runtime.block_on(async {
+                // Execute write asynchronously
+                runtime.spawn(async move {
                     // Choose write method based on with_response parameter
-                    if with_response {
+                    let result = if with_response {
                         peripheral
-                            .write(char, &data_vec, WriteType::WithResponse)
+                            .write(&char_clone, &data_vec, WriteType::WithResponse)
                             .await
                     } else {
                         peripheral
-                            .write(char, &data_vec, WriteType::WithoutResponse)
+                            .write(&char_clone, &data_vec, WriteType::WithoutResponse)
                             .await
+                    };
+
+                    match result {
+                        Ok(_) => {
+                            ble_info!(
+                                "Successfully wrote {} bytes to characteristic {}",
+                                data_len,
+                                char_uuid_str
+                            );
+
+                            // Call back to main thread to emit signal
+                            if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id)
+                            {
+                                obj.call_deferred(
+                                    "_on_characteristic_written",
+                                    &[GString::from(&char_uuid_str).to_variant()],
+                                );
+                            } else {
+                                ble_error!("Failed to get device instance for write callback");
+                            }
+                        }
+                        Err(e) => {
+                            let error = BleError::WriteFailed(e.to_string());
+                            error.log_error();
+
+                            // Call back to main thread to emit signal
+                            if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id)
+                            {
+                                obj.call_deferred(
+                                    "_on_operation_failed",
+                                    &[
+                                        GString::from("write_characteristic").to_variant(),
+                                        error.to_gstring().to_variant(),
+                                    ],
+                                );
+                            } else {
+                                ble_error!("Failed to get device instance for error callback");
+                            }
+                        }
                     }
                 });
-
-                match result {
-                    Ok(_) => {
-                        ble_info!(
-                            "Successfully wrote {} bytes to characteristic {}",
-                            data_len,
-                            char_uuid_str
-                        );
-
-                        // Call back to main thread to emit signal
-                        if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id)
-                        {
-                            obj.call_deferred(
-                                "_on_characteristic_written",
-                                &[GString::from(&char_uuid_str).to_variant()],
-                            );
-                        } else {
-                            ble_error!("Failed to get device instance for write callback");
-                        }
-                    }
-                    Err(e) => {
-                        let error = BleError::WriteFailed(e.to_string());
-                        error.log_error();
-
-                        // Call back to main thread to emit signal
-                        if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id)
-                        {
-                            obj.call_deferred(
-                                "_on_operation_failed",
-                                &[
-                                    GString::from("write_characteristic").to_variant(),
-                                    error.to_gstring().to_variant(),
-                                ],
-                            );
-                        } else {
-                            ble_error!("Failed to get device instance for error callback");
-                        }
-                    }
-                }
             }
             None => {
                 let error = BleError::CharacteristicNotFound(format!(
@@ -732,93 +734,94 @@ impl BleDevice {
         match characteristic {
             Some(char) => {
                 ble_debug!("Found characteristic {}, subscribing", char_uuid_str);
+                let char_clone = char.clone();
                 
-                // Execute subscribe synchronously using block_on
-                let result = runtime.block_on(async {
-                    peripheral.subscribe(char).await
-                });
+                // Execute subscribe asynchronously
+                runtime.spawn(async move {
+                    let result = peripheral.subscribe(&char_clone).await;
 
-                match result {
-                    Ok(_) => {
-                        // Add to subscribed set
-                        subscribed_chars
-                            .lock()
-                            .unwrap()
-                            .insert(char_uuid_str.to_lowercase());
+                    match result {
+                        Ok(_) => {
+                            // Add to subscribed set
+                            subscribed_chars
+                                .lock()
+                                .unwrap()
+                                .insert(char_uuid_str.to_lowercase());
 
-                        ble_info!(
-                            "Successfully subscribed to characteristic {}",
-                            char_uuid_str
-                        );
+                            ble_info!(
+                                "Successfully subscribed to characteristic {}",
+                                char_uuid_str
+                            );
 
-                        // Set up notification handler
-                        let peripheral_clone = peripheral.clone();
-                        let char_uuid_for_handler = char_uuid_str.clone();
+                            // Set up notification handler
+                            let peripheral_clone = peripheral.clone();
+                            let char_uuid_for_handler = char_uuid_str.clone();
 
-                        tokio::spawn(async move {
-                            ble_debug!("Starting notification handler for {}", char_uuid_for_handler);
-                            let mut notification_stream = peripheral_clone.notifications().await;
+                            tokio::spawn(async move {
+                                ble_debug!("Starting notification handler for {}", char_uuid_for_handler);
+                                let mut notification_stream = peripheral_clone.notifications().await;
 
-                            if let Ok(stream) = notification_stream.as_mut() {
-                                use futures::StreamExt;
-                                while let Some(notification) = stream.next().await {
-                                    // Check if this notification is for our characteristic
-                                    if notification
-                                        .uuid
-                                        .to_string()
-                                        .eq_ignore_ascii_case(&char_uuid_for_handler)
-                                    {
-                                        ble_debug!(
-                                            "Received notification from {}: {} bytes",
-                                            char_uuid_for_handler,
-                                            notification.value.len()
-                                        );
-
-                                        let packed_data =
-                                            PackedByteArray::from(&notification.value[..]);
-
-                                        // Call back to main thread to emit signal
-                                        if let Ok(mut obj) =
-                                            Gd::<BleDevice>::try_from_instance_id(instance_id)
+                                if let Ok(stream) = notification_stream.as_mut() {
+                                    use futures::StreamExt;
+                                    while let Some(notification) = stream.next().await {
+                                        // Check if this notification is for our characteristic
+                                        if notification
+                                            .uuid
+                                            .to_string()
+                                            .eq_ignore_ascii_case(&char_uuid_for_handler)
                                         {
-                                            obj.call_deferred(
-                                                "_on_characteristic_notified",
-                                                &[
-                                                    GString::from(&char_uuid_for_handler)
-                                                        .to_variant(),
-                                                    packed_data.to_variant(),
-                                                ],
+                                            ble_debug!(
+                                                "Received notification from {}: {} bytes",
+                                                char_uuid_for_handler,
+                                                notification.value.len()
                                             );
-                                        } else {
-                                            ble_error!("Failed to get device instance for notification callback");
+
+                                            let packed_data =
+                                                PackedByteArray::from(&notification.value[..]);
+
+                                            // Call back to main thread to emit signal
+                                            if let Ok(mut obj) =
+                                                Gd::<BleDevice>::try_from_instance_id(instance_id)
+                                            {
+                                                obj.call_deferred(
+                                                    "_on_characteristic_notified",
+                                                    &[
+                                                        GString::from(&char_uuid_for_handler)
+                                                            .to_variant(),
+                                                        packed_data.to_variant(),
+                                                    ],
+                                                );
+                                            } else {
+                                                ble_error!("Failed to get device instance for notification callback");
+                                            }
                                         }
                                     }
+                                    ble_debug!("Notification stream ended for {}", char_uuid_for_handler);
+                                } else {
+                                    ble_error!("Failed to get notification stream for {}", char_uuid_for_handler);
                                 }
-                                ble_debug!("Notification stream ended for {}", char_uuid_for_handler);
-                            } else {
-                                ble_error!("Failed to get notification stream for {}", char_uuid_for_handler);
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        let error = BleError::SubscribeFailed(e.to_string());
-                        error.log_error();
+                            });
+                        }
+                        Err(e) => {
+                            let error = BleError::SubscribeFailed(e.to_string());
+                            error.log_error();
 
-                        // Call back to main thread to emit signal
-                        if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id)
-                        {
-                            obj.call_deferred(
-                                "_on_operation_failed",
-                                &[
-                                    GString::from("subscribe_characteristic").to_variant(),
-                                    error.to_gstring().to_variant(),
-                                ],
-                            );
-                        } else {
-                            ble_error!("Failed to get device instance for error callback");
+                            // Call back to main thread to emit signal
+                            if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id)
+                            {
+                                obj.call_deferred(
+                                    "_on_operation_failed",
+                                    &[
+                                        GString::from("subscribe_characteristic").to_variant(),
+                                        error.to_gstring().to_variant(),
+                                    ],
+                                );
+                            } else {
+                                ble_error!("Failed to get device instance for error callback");
+                            }
                         }
                     }
-                }
+                });
             }
             None => {
                 let error = BleError::CharacteristicNotFound(format!(
@@ -895,44 +898,45 @@ impl BleDevice {
         match characteristic {
             Some(char) => {
                 ble_debug!("Found characteristic {}, unsubscribing", char_uuid_str);
+                let char_clone = char.clone();
                 
-                // Execute unsubscribe synchronously using block_on
-                let result = runtime.block_on(async {
-                    peripheral.unsubscribe(char).await
-                });
+                // Execute unsubscribe asynchronously
+                runtime.spawn(async move {
+                    let result = peripheral.unsubscribe(&char_clone).await;
 
-                match result {
-                    Ok(_) => {
-                        // Remove from subscribed set
-                        subscribed_chars
-                            .lock()
-                            .unwrap()
-                            .remove(&char_uuid_str.to_lowercase());
+                    match result {
+                        Ok(_) => {
+                            // Remove from subscribed set
+                            subscribed_chars
+                                .lock()
+                                .unwrap()
+                                .remove(&char_uuid_str.to_lowercase());
 
-                        ble_info!(
-                            "Successfully unsubscribed from characteristic {}",
-                            char_uuid_str
-                        );
-                    }
-                    Err(e) => {
-                        let error = BleError::UnsubscribeFailed(e.to_string());
-                        error.log_error();
-
-                        // Call back to main thread to emit signal
-                        if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id)
-                        {
-                            obj.call_deferred(
-                                "_on_operation_failed",
-                                &[
-                                    GString::from("unsubscribe_characteristic").to_variant(),
-                                    error.to_gstring().to_variant(),
-                                ],
+                            ble_info!(
+                                "Successfully unsubscribed from characteristic {}",
+                                char_uuid_str
                             );
-                        } else {
-                            ble_error!("Failed to get device instance for error callback");
+                        }
+                        Err(e) => {
+                            let error = BleError::UnsubscribeFailed(e.to_string());
+                            error.log_error();
+
+                            // Call back to main thread to emit signal
+                            if let Ok(mut obj) = Gd::<BleDevice>::try_from_instance_id(instance_id)
+                            {
+                                obj.call_deferred(
+                                    "_on_operation_failed",
+                                    &[
+                                        GString::from("unsubscribe_characteristic").to_variant(),
+                                        error.to_gstring().to_variant(),
+                                    ],
+                                );
+                            } else {
+                                ble_error!("Failed to get device instance for error callback");
+                            }
                         }
                     }
-                }
+                });
             }
             None => {
                 let error = BleError::CharacteristicNotFound(format!(
