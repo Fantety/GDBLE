@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::runtime::Runtime;
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use crate::types::{BleError, DeviceInfo};
@@ -49,14 +50,19 @@ impl BluetoothScanner {
     /// Starts scanning for BLE devices
     /// 
     /// This method initiates a BLE scan that will run for the specified duration.
-    /// Discovered devices are stored internally and can be retrieved via get_devices().
+    /// Discovered devices are sent through the provided channel as they are found.
     /// 
     /// # Parameters
     /// * `scan_duration` - How long to scan for devices
+    /// * `device_tx` - Channel sender for discovered devices
     /// 
     /// # Returns
     /// Ok(()) if scanning started successfully, Err otherwise
-    pub async fn start_scan(&self, scan_duration: Duration) -> Result<(), BleError> {
+    pub async fn start_scan(
+        &self,
+        scan_duration: Duration,
+        device_tx: mpsc::UnboundedSender<DeviceInfo>,
+    ) -> Result<(), BleError> {
         ble_debug!("Starting BLE scan for {:?}", scan_duration);
 
         // Check if already scanning
@@ -112,7 +118,7 @@ impl BluetoothScanner {
 
         // Wait for scan duration with additional debugging
         ble_debug!("Waiting for scan duration: {:?}", scan_duration);
-        let result = timeout(scan_duration, self.collect_devices()).await;
+        let result = timeout(scan_duration, self.collect_devices(device_tx)).await;
         ble_debug!("Scan timeout completed, checking result...");
 
         // Stop scanning
@@ -176,9 +182,9 @@ impl BluetoothScanner {
 
     /// Collects devices during scanning
     /// 
-    /// This internal method listens for device discovery events and updates
-    /// the discovered_devices map.
-    async fn collect_devices(&self) -> Result<(), BleError> {
+    /// This internal method listens for device discovery events and sends them
+    /// through the channel immediately, while also updating the discovered_devices map.
+    async fn collect_devices(&self, device_tx: mpsc::UnboundedSender<DeviceInfo>) -> Result<(), BleError> {
         use btleplug::api::Peripheral as _;
         
         ble_debug!("Starting device collection");
@@ -233,9 +239,14 @@ impl BluetoothScanner {
 
                             // Store device
                             if let Ok(mut devices) = self.discovered_devices.lock() {
-                                devices.insert(address, device_info);
+                                devices.insert(address.clone(), device_info.clone());
                             } else {
                                 ble_error!("Failed to acquire device map lock");
+                            }
+
+                            // Send device info immediately through channel
+                            if device_tx.send(device_info).is_err() {
+                                ble_warn!("Failed to send device info through channel");
                             }
                         } else {
                             ble_debug!("Failed to get properties for device {:?}", id);
@@ -264,10 +275,21 @@ impl BluetoothScanner {
                             let device_info = DeviceInfo::new(address.clone(), name, rssi);
 
                             // Update device
-                            if let Ok(mut devices) = self.discovered_devices.lock() {
-                                devices.insert(address, device_info);
+                            let should_send = if let Ok(mut devices) = self.discovered_devices.lock() {
+                                // Only send update if device already exists (to avoid duplicates)
+                                let exists = devices.contains_key(&address);
+                                devices.insert(address.clone(), device_info.clone());
+                                exists
                             } else {
                                 ble_error!("Failed to acquire device map lock");
+                                false
+                            };
+
+                            // Send device update through channel if it's an existing device
+                            if should_send {
+                                if device_tx.send(device_info).is_err() {
+                                    ble_warn!("Failed to send device update through channel");
+                                }
                             }
                         }
                     }

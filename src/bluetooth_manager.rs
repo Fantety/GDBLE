@@ -31,8 +31,11 @@ pub struct BluetoothManager {
     /// Bluetooth scanner for device discovery
     scanner: Option<Arc<BluetoothScanner>>,
 
-    /// Channel receiver for scan results
-    scan_result_rx: Option<Arc<Mutex<mpsc::UnboundedReceiver<Result<Vec<DeviceInfo>, String>>>>>,
+    /// Channel receiver for scan completion
+    scan_complete_rx: Option<Arc<Mutex<mpsc::UnboundedReceiver<Result<(), String>>>>>,
+
+    /// Channel receiver for discovered devices (real-time)
+    device_rx: Option<Arc<Mutex<mpsc::UnboundedReceiver<DeviceInfo>>>>,
 
     /// Map of connected devices by address
     devices: Arc<Mutex<HashMap<String, Gd<BleDevice>>>>,
@@ -51,7 +54,8 @@ impl INode for BluetoothManager {
             adapter: None,
             runtime: None,
             scanner: None,
-            scan_result_rx: None,
+            scan_complete_rx: None,
+            device_rx: None,
             devices: Arc::new(Mutex::new(HashMap::new())),
             is_initialized: Arc::new(Mutex::new(false)),
         }
@@ -64,12 +68,30 @@ impl INode for BluetoothManager {
         self.base_mut().set_process(true);
     }
 
-    /// Called every frame to process scan results
+    /// Called every frame to process scan results and discovered devices
     fn process(&mut self, _delta: f64) {
-        // Check for scan results
-        let result_opt = if let Some(ref rx_arc) = self.scan_result_rx {
+        // Collect discovered devices (real-time)
+        let mut devices_to_emit = Vec::new();
+        if let Some(ref rx_arc) = self.device_rx {
             if let Ok(mut rx) = rx_arc.lock() {
-                // Try to receive scan result (non-blocking)
+                // Collect all available devices
+                while let Ok(device_info) = rx.try_recv() {
+                    devices_to_emit.push(device_info);
+                }
+            }
+        }
+
+        // Emit device_discovered signals
+        for device_info in devices_to_emit {
+            let dict = device_info.to_dictionary();
+            self.base_mut()
+                .emit_signal("device_discovered", &[dict.to_variant()]);
+        }
+
+        // Check for scan completion
+        let complete_opt = if let Some(ref rx_arc) = self.scan_complete_rx {
+            if let Ok(mut rx) = rx_arc.lock() {
+                // Try to receive scan completion (non-blocking)
                 rx.try_recv().ok()
             } else {
                 None
@@ -78,20 +100,15 @@ impl INode for BluetoothManager {
             None
         };
 
-        // Process the result if we got one
-        if let Some(result) = result_opt {
-            // Clear the receiver
-            self.scan_result_rx = None;
+        // Process scan completion if we got one
+        if let Some(result) = complete_opt {
+            // Clear the receivers
+            self.scan_complete_rx = None;
+            self.device_rx = None;
 
             // Process the result
             match result {
-                Ok(devices) => {
-                    // Emit device_discovered signals
-                    for device in devices {
-                        let dict = device.to_dictionary();
-                        self.base_mut()
-                            .emit_signal("device_discovered", &[dict.to_variant()]);
-                    }
+                Ok(()) => {
                     // Emit scan_stopped signal
                     self.base_mut().emit_signal("scan_stopped", &[]);
                 }
@@ -375,9 +392,12 @@ impl BluetoothManager {
 
         let duration = Duration::from_secs_f64(timeout_seconds);
 
-        // Create channel for scan results
-        let (tx, rx) = mpsc::unbounded_channel();
-        self.scan_result_rx = Some(Arc::new(Mutex::new(rx)));
+        // Create channels for scan completion and device discovery
+        let (complete_tx, complete_rx) = mpsc::unbounded_channel();
+        let (device_tx, device_rx) = mpsc::unbounded_channel();
+        
+        self.scan_complete_rx = Some(Arc::new(Mutex::new(complete_rx)));
+        self.device_rx = Some(Arc::new(Mutex::new(device_rx)));
 
         // Execute scan task asynchronously
         if let Some(ref runtime_mgr) = self.runtime {
@@ -385,13 +405,13 @@ impl BluetoothManager {
             runtime_mgr.spawn(async move {
                 ble_debug!("Scan task started");
                 ble_debug!("About to call scanner.start_scan()");
-                let scan_result = match scanner.start_scan(duration).await {
+                let scan_result = match scanner.start_scan(duration, device_tx).await {
                     Ok(()) => {
                         ble_debug!("scanner.start_scan() returned Ok");
                         let devices = scanner.get_devices();
                         ble_info!("Scan completed successfully, found {} devices", devices.len());
                         ble_debug!("Discovered devices: {:?}", devices);
-                        Ok(devices)
+                        Ok(())
                     }
                     Err(e) => {
                         ble_debug!("scanner.start_scan() returned Err: {}", e);
@@ -400,12 +420,12 @@ impl BluetoothManager {
                     }
                 };
                 
-                ble_debug!("Scan task completed, sending result through channel");
-                // Send result through channel
-                if tx.send(scan_result).is_err() {
-                    ble_error!("Failed to send scan results through channel");
+                ble_debug!("Scan task completed, sending completion signal through channel");
+                // Send completion signal through channel
+                if complete_tx.send(scan_result).is_err() {
+                    ble_error!("Failed to send scan completion through channel");
                 } else {
-                    ble_debug!("Result sent through channel successfully");
+                    ble_debug!("Completion signal sent through channel successfully");
                 }
             });
         } else {
