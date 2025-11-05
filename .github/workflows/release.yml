@@ -195,32 +195,72 @@ jobs:
           body: |
             # GDBLE ${{ steps.get_version.outputs.version }}
             
-            ## 🎉 Release Notes
+            ## 🎉 What's New
             
-            A modern Bluetooth Low Energy (BLE) plugin for Godot 4.
+            A modern Bluetooth Low Energy (BLE) plugin for Godot 4, completely rewritten in Rust.
+            
+            ### ✨ Key Features
+            
+            - **Real-time Device Discovery**: Devices appear instantly as they're found during scanning
+            - **Async Non-blocking**: All operations run asynchronously without affecting game frame rate
+            - **Modern Architecture**: Built with Rust and btleplug for excellent performance and stability
+            - **Signal-driven API**: Clean event system using Godot signals
+            - **Debug Mode**: Optional detailed logging for development and troubleshooting
+            - **Multi-device Support**: Connect and manage multiple BLE devices simultaneously
+            
+            ### 🔧 Core Functionality
+            
+            - 🔍 Device scanning with real-time discovery
+            - �  Device connection management
+            - 🔎 Automatic service and characteristic discovery
+            - 📖 Read characteristic values
+            - ✍️ Write data (with/without response)
+            - 🔔 Subscribe to notifications for real-time data
             
             ## 📦 Installation
             
             1. Download `gdble-release.zip`
             2. Extract to your Godot project's `addons` folder
             3. Restart Godot Editor
+            4. Start using GDBLE in your project!
             
             ## 🌍 Platform Support
             
-            - ✅ Windows 10+
-            - ✅ macOS 10.15+ (Universal Binary: x86_64 + ARM64)
-            - 🚧 Linux (In Development)
+            - ✅ **Windows** 10+ (x86_64)
+            - ✅ **macOS** 10.15+ (Universal Binary: Intel + Apple Silicon)
+            - 🚧 **Linux** (In Development)
             
             ## 📚 Documentation
             
-            - [中文文档](README.md)
-            - [English Documentation](README_EN.md)
+            - 📖 [中文文档 (Chinese)](https://github.com/Fantety/GodotBLE/blob/master/README.md)
+            - 📖 [English Documentation](https://github.com/Fantety/GodotBLE/blob/master/README_EN.md)
+            - 🎮 [Demo Guide](https://github.com/Fantety/GodotBLE/blob/master/demo/DEMO_GUIDE.md)
+            - 🚀 [Quick Start](https://github.com/Fantety/GodotBLE/blob/master/QUICK_START_RELEASE.md)
             
             ## 🔗 Links
             
             - [GitHub Repository](https://github.com/Fantety/GodotBLE)
             - [Godot Asset Library](https://godotengine.org/asset-library/asset/3439)
             - [Report Issues](https://github.com/Fantety/GodotBLE/issues)
+            - [Submit Pull Requests](https://github.com/Fantety/GodotBLE/pulls)
+            
+            ## 💡 Quick Example
+            
+            ```gdscript
+            var bluetooth_manager = BluetoothManager.new()
+            add_child(bluetooth_manager)
+            
+            bluetooth_manager.device_discovered.connect(func(info):
+                print("Found: ", info.get("name"))
+            )
+            
+            bluetooth_manager.initialize()
+            bluetooth_manager.start_scan(10.0)
+            ```
+            
+            ## 🙏 Acknowledgments
+            
+            Built with [btleplug](https://github.com/deviceplug/btleplug) and [godot-rust](https://github.com/godot-rust/gdext)
             
             ---
             
