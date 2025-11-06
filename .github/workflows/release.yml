@@ -182,7 +182,7 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "branch=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "branch=main" >> $GITHUB_OUTPUT
+            echo "branch=master" >> $GITHUB_OUTPUT
           fi
 
       - name: Checkout target branch
