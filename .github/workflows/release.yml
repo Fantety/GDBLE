@@ -176,6 +176,20 @@ jobs:
         with:
           path: artifacts
 
+      - name: Determine target branch
+        id: branch
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "branch=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "branch=main" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout target branch
+        run: |
+          git fetch origin ${{ steps.branch.outputs.branch }}
+          git checkout ${{ steps.branch.outputs.branch }}
+
       - name: Update binaries in addons folder
         run: |
           # Copy Windows binary
@@ -184,7 +198,7 @@ jobs:
             echo "✓ Updated Windows binary"
           fi
           
-          # Copy macOS binaries
+          # Copy macOS binaries for universal binary creation
           if [ -f artifacts/gdble-macos/libgdble.dylib ]; then
             cp artifacts/gdble-macos/libgdble.dylib addons/gdble/libgdble.x86_64.dylib
             echo "✓ Downloaded macOS x86_64 binary"
@@ -194,9 +208,7 @@ jobs:
             cp artifacts/gdble-macos-arm/libgdble.dylib addons/gdble/libgdble.arm64.dylib
             echo "✓ Downloaded macOS ARM64 binary"
           fi
-
-      - name: Create universal macOS binary
-        run: |
+          
           # Create universal binary if both architectures exist
           if [ -f addons/gdble/libgdble.x86_64.dylib ] && [ -f addons/gdble/libgdble.arm64.dylib ]; then
             lipo -create \
@@ -224,8 +236,8 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "chore: update binaries for ${{ github.ref_name }}"
-            git push
-            echo "✓ Binaries updated in repository"
+            git push origin ${{ steps.branch.outputs.branch }}
+            echo "✓ Binaries updated in repository on branch ${{ steps.branch.outputs.branch }}"
           fi
 
   release:
