@@ -158,9 +158,79 @@ jobs:
           path: gdble-release.zip
           retention-days: 30
 
+  update-binaries:
+    name: Update Repository Binaries
+    needs: build
+    runs-on: macos-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Update binaries in addons folder
+        run: |
+          # Copy Windows binary
+          if [ -f artifacts/gdble-windows/gdble.dll ]; then
+            cp artifacts/gdble-windows/gdble.dll addons/gdble/
+            echo "✓ Updated Windows binary"
+          fi
+          
+          # Copy macOS binaries
+          if [ -f artifacts/gdble-macos/libgdble.dylib ]; then
+            cp artifacts/gdble-macos/libgdble.dylib addons/gdble/libgdble.x86_64.dylib
+            echo "✓ Downloaded macOS x86_64 binary"
+          fi
+          
+          if [ -f artifacts/gdble-macos-arm/libgdble.dylib ]; then
+            cp artifacts/gdble-macos-arm/libgdble.dylib addons/gdble/libgdble.arm64.dylib
+            echo "✓ Downloaded macOS ARM64 binary"
+          fi
+
+      - name: Create universal macOS binary
+        run: |
+          # Create universal binary if both architectures exist
+          if [ -f addons/gdble/libgdble.x86_64.dylib ] && [ -f addons/gdble/libgdble.arm64.dylib ]; then
+            lipo -create \
+              addons/gdble/libgdble.x86_64.dylib \
+              addons/gdble/libgdble.arm64.dylib \
+              -output addons/gdble/libgdble.dylib
+            rm addons/gdble/libgdble.x86_64.dylib addons/gdble/libgdble.arm64.dylib
+            echo "✓ Created universal macOS binary"
+          elif [ -f addons/gdble/libgdble.x86_64.dylib ]; then
+            mv addons/gdble/libgdble.x86_64.dylib addons/gdble/libgdble.dylib
+            echo "✓ Using x86_64 binary"
+          elif [ -f addons/gdble/libgdble.arm64.dylib ]; then
+            mv addons/gdble/libgdble.arm64.dylib addons/gdble/libgdble.dylib
+            echo "✓ Using ARM64 binary"
+          fi
+
+      - name: Commit and push binaries
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add addons/gdble/*.dll addons/gdble/*.dylib 2>/dev/null || true
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update binaries for ${{ github.ref_name }}"
+            git push
+            echo "✓ Binaries updated in repository"
+          fi
+
   release:
     name: Create GitHub Release
-    needs: package
+    needs: [package, update-binaries]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     permissions:
