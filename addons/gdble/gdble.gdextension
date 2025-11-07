@@ -4,8 +4,6 @@ compatibility_minimum = 4.1
 reloadable = true
 
 [libraries]
-linux.debug.x86_64 =     "res://addons/gdble/libgdble.so"
-linux.release.x86_64 =   "res://addons/gdble/libgdble.so"
 windows.debug.x86_64 =   "res://addons/gdble/gdble.dll"
 windows.release.x86_64 = "res://addons/gdble/gdble.dll"
 macos.debug =            "res://addons/gdble/libgdble.dylib"
