@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install Linux BLE dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libudev-dev
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --all-targets --all-features --locked
+      - name: Static lifecycle checks
+        shell: bash
+        run: |
+          ! rg 'block_on|unbounded_channel|mpsc::unbounded|tokio::spawn' src
+          ! rg 'Arc<Mutex<[^>]*Gd<' src
+          test "$(rg -n 'EVENTS_PER_FRAME: usize = 256' src/bluetooth_manager.rs | wc -l)" -eq 1
+
+  platform-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux BLE dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libudev-dev
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+
+  godot-load:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        godot: ["4.2.2", "4.6.1"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux BLE dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libudev-dev
+      - run: cargo build --release --locked
+      - name: Generate Demo addon
+        run: |
+          cp target/release/libgdble.so addons/gdble/libgdble.linux.x86_64.so
+          bash scripts/sync-demo-addon.sh
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: ${{ matrix.godot }}
+          use-dotnet: false
+      - run: godot --headless --path demo --script smoke_test.gd
+
+  android-aar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+      - run: cargo install cargo-ndk --locked
+      - run: bash scripts/build-android.sh
+      - name: Validate AAR contents
+        run: |
+          unzip -l addons/gdble/android/gdble-release.aar | tee gdble-aar.txt
+          rg 'jni/arm64-v8a/libgdble.so' gdble-aar.txt
+          rg 'jni/x86_64/libgdble.so' gdble-aar.txt
+          rg 'assets/addons/gdble/gdble.gdextension' gdble-aar.txt
+          aapt2="$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -1)"
+          "$aapt2" dump xmltree --file AndroidManifest.xml addons/gdble/android/gdble-release.aar | rg 'org.godotengine.plugin.v2.GDBLE'
+          unzip -p addons/gdble/android/gdble-release.aar classes.jar > /tmp/gdble-plugin.jar
+          jar tf /tmp/gdble-plugin.jar | rg 'org/gdble/android/GDBLEPlugin.class'
+          unzip -p addons/gdble/android/btleplug-release.aar classes.jar > /tmp/btleplug.jar
+          jar tf /tmp/btleplug.jar | rg 'com/nonpolynomial/btleplug/android/impl'

@@ -2,7 +2,7 @@ use crate::ble_characteristic::BleCharacteristicInfo;
 use godot::prelude::*;
 
 /// BLE 服务信息
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BleServiceInfo {
     pub uuid: String,
     pub characteristics: Vec<BleCharacteristicInfo>,

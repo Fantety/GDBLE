@@ -1,5 +1,11 @@
 # GDBLE Demo 使用指南
 
+Demo 要求 Godot 4.2+。`demo/addons/gdble` 由根目录构建脚本从 canonical `addons/gdble` 生成；首次运行前请执行 `build.ps1` 或 `build.sh`。
+
+Android 导出使用 Gradle、minSdk 23，并同时打包 GDBLE 与 btleplug 两个 AAR。Demo 会在 `BluetoothManager.initialize()` 前调用 `OS.request_permissions()`。插件不会自行弹出权限框。
+
+两个示例同时监听旧信号和新的 `ble_event(Dictionary)`；异步方法的返回值是可用于关联终止事件的 operation ID，旧代码可以忽略该返回值。
+
 ## 文件说明
 
 ### bluetooth_test.gd

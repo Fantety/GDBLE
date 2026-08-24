@@ -45,6 +45,9 @@ func _ready():
 	print("Initializing Bluetooth adapter...")
 	# 关闭调试模式以保持输出清洁（开发时可设为 true）
 	bluetooth_manager.set_debug_mode(false)
+	# Android 插件只声明权限，不自动弹框；必须在初始化前由应用请求。
+	if OS.get_name() == "Android":
+		OS.request_permissions()
 	bluetooth_manager.initialize()
 
 func setup_signals():
@@ -57,6 +60,12 @@ func setup_signals():
 	bluetooth_manager.scan_started.connect(_on_scan_started)
 	bluetooth_manager.scan_stopped.connect(_on_scan_stopped)
 	bluetooth_manager.error_occurred.connect(_on_error_occurred)
+	bluetooth_manager.ble_event.connect(_on_ble_event)
+
+func _on_ble_event(event: Dictionary):
+	"""统一结构化事件；旧信号仍保持兼容。"""
+	if event.terminal or event.phase == &"received":
+		print("BLE event: ", event)
 
 func start_scanning():
 	"""开始扫描附近的 BLE 设备"""

@@ -1,7 +1,7 @@
 use godot::prelude::*;
 
 /// 特征值属性
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CharacteristicProperties {
     pub read: bool,
     pub write: bool,
@@ -24,7 +24,7 @@ impl CharacteristicProperties {
 }
 
 /// BLE 特征值信息
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BleCharacteristicInfo {
     pub uuid: String,
     pub properties: CharacteristicProperties,

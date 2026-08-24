@@ -1,17 +1,20 @@
 [package]
 name = "gdble"
-version = "0.5.5"
+version = "0.6.0"
 edition = "2021"
 
 [dependencies]
-godot = "0.5.2"
+godot = { version = "0.5.2", features = ["api-4-2"] }
 btleplug = "0.12.0"
 tokio = { version = "1.52.1", features = ["full"] }
 futures = "0.3.32"
+async-trait = "0.1.89"
+thiserror = "2.0.18"
+tokio-util = { version = "0.7.16", features = ["rt"] }
+uuid = "1.23.1"
 
-[features]
-default = []
-android = []
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.19.0"
 
 [lib]
 crate-type = ["cdylib"]

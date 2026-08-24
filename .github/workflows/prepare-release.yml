@@ -1,0 +1,109 @@
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without the v prefix
+        required: true
+        default: 0.6.0
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  desktop:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            source: target/x86_64-pc-windows-msvc/release/gdble.dll
+            output: libgdble.windows.x86_64.dll
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            source: target/x86_64-unknown-linux-gnu/release/libgdble.so
+            output: libgdble.linux.x86_64.so
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            source: target/x86_64-apple-darwin/release/libgdble.dylib
+            output: libgdble.macos.x86_64.dylib
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            source: target/aarch64-apple-darwin/release/libgdble.dylib
+            output: libgdble.macos.arm64.dylib
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libudev-dev
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - shell: bash
+        run: |
+          mkdir artifact
+          cp '${{ matrix.source }}' 'artifact/${{ matrix.output }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: artifact/*
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+      - run: cargo install cargo-ndk --locked
+      - run: bash scripts/build-android.sh
+      - name: Validate Android package
+        run: |
+          unzip -l addons/gdble/android/gdble-release.aar | rg 'jni/arm64-v8a/libgdble.so'
+          unzip -l addons/gdble/android/gdble-release.aar | rg 'jni/x86_64/libgdble.so'
+          unzip -p addons/gdble/android/btleplug-release.aar classes.jar > /tmp/btleplug.jar
+          jar tf /tmp/btleplug.jar | rg 'com/nonpolynomial/btleplug/android/impl'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-aars
+          path: addons/gdble/android/*.aar
+
+  release-pr:
+    needs: [desktop, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+      - name: Update canonical addon and hashes
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)" = "$VERSION"
+          mkdir -p addons/gdble/android
+          cp release-artifacts/libgdble.* addons/gdble/
+          cp release-artifacts/*.aar addons/gdble/android/
+          (cd addons/gdble && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          ! find addons/gdble -maxdepth 1 -type f \( -name 'gdble.dll' -o -name 'libgdble.android.*.so' -o -name 'libgdble.arm64.so' -o -name 'libgdble.x86_64.so' \) | grep .
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: release/v${{ inputs.version }}
+          commit-message: "chore: prepare GDBLE v${{ inputs.version }}"
+          title: "Release GDBLE v${{ inputs.version }}"
+          body: |
+            Prepared release artifacts, canonical addon contents, and SHA-256 hashes.
+            Merge this PR before creating tag `v${{ inputs.version }}` on the merge commit.
+          add-paths: addons/gdble

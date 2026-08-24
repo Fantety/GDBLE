@@ -267,12 +267,17 @@ dependencies = [
 
 [[package]]
 name = "gdble"
-version = "0.5.5"
+version = "0.6.0"
 dependencies = [
+ "async-trait",
  "btleplug",
  "futures",
  "godot",
+ "jni",
+ "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
+ "uuid",
 ]
 
 [[package]]
@@ -817,6 +822,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

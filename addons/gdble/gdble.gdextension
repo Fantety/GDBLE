@@ -1,7 +1,8 @@
 [configuration]
 entry_symbol = "gdext_rust_init"
-compatibility_minimum = 4.1
+compatibility_minimum = "4.2"
 reloadable = true
+android_aar_plugin = true
 
 [libraries]
 linux.debug.x86_64 =     "res://addons/gdble/libgdble.linux.x86_64.so"
@@ -12,7 +13,7 @@ macos.debug =            "res://addons/gdble/libgdble.macos.x86_64.dylib"
 macos.release =          "res://addons/gdble/libgdble.macos.x86_64.dylib"
 macos.debug.arm64 =      "res://addons/gdble/libgdble.macos.arm64.dylib"
 macos.release.arm64 =    "res://addons/gdble/libgdble.macos.arm64.dylib"
-android.debug.arm64 =     "res://addons/gdble/libgdble.android.arm64.so"
-android.release.arm64 =   "res://addons/gdble/libgdble.android.arm64.so"
-android.debug.x86_64 =    "res://addons/gdble/libgdble.android.x86_64.so"
-android.release.x86_64 =  "res://addons/gdble/libgdble.android.x86_64.so"
+android.debug.arm64 =     "res://addons/gdble/libgdble.so"
+android.release.arm64 =   "res://addons/gdble/libgdble.so"
+android.debug.x86_64 =    "res://addons/gdble/libgdble.so"
+android.release.x86_64 =  "res://addons/gdble/libgdble.so"

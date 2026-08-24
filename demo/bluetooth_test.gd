@@ -46,10 +46,17 @@ func _ready():
 	bluetooth_manager.scan_started.connect(_on_scan_started)
 	bluetooth_manager.scan_stopped.connect(_on_scan_stopped)
 	bluetooth_manager.error_occurred.connect(_on_error_occurred)
+	bluetooth_manager.ble_event.connect(_on_ble_event)
 	
 	print("Initializing Bluetooth adapter...")
 	bluetooth_manager.set_debug_mode(true)
+	if OS.get_name() == "Android":
+		OS.request_permissions()
 	bluetooth_manager.initialize()
+
+func _on_ble_event(event: Dictionary):
+	if event.terminal or event.phase == &"received":
+		print("BLE event: ", event)
 
 func _process(delta: float):
 	if is_stress_testing:

@@ -1,13 +1,17 @@
 use godot::prelude::*;
 
 // Module declarations
+mod backend;
 mod ble_characteristic;
 mod ble_device;
 mod ble_service;
 mod bluetooth_manager;
-mod bluetooth_scanner;
-mod runtime;
+mod core;
+mod godot_event;
 mod types;
+
+#[cfg(target_os = "android")]
+mod android;
 
 // Re-export main classes for easier access
 pub use ble_device::BleDevice;

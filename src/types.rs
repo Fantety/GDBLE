@@ -59,7 +59,7 @@ macro_rules! ble_error {
 }
 
 /// 设备信息结构
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceInfo {
     pub address: String,
     pub name: Option<String>,
@@ -149,56 +149,77 @@ impl DeviceInfo {
     }
 }
 
-/// BLE 错误类型
-#[derive(Debug, Clone)]
+/// Error values passed through the Rust core and exposed as stable event codes.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Eq, PartialEq, thiserror::Error)]
 pub enum BleError {
-    /// 未找到蓝牙适配器
+    #[error("Invalid argument: {0}")]
+    InvalidArgument(String),
+    #[error("Operation is busy: {0}")]
+    Busy(String),
+    #[error("The command queue is full")]
+    QueueFull,
+    #[error("Operation cancelled: {0}")]
+    Cancelled(String),
+    #[error("Android Bluetooth bridge is not initialized: {0}")]
+    AndroidNotInitialized(String),
+    #[error("Characteristic UUID is ambiguous across services: {0}")]
+    AmbiguousCharacteristic(String),
+    #[error("Bluetooth is not initialized")]
+    NotInitialized,
+    #[error("Bluetooth adapter not found")]
     AdapterNotFound,
-    /// 未找到设备
+    #[error("Device not found: {0}")]
     DeviceNotFound(String),
-    /// 连接失败
+    #[error("Connection failed: {0}")]
     ConnectionFailed(String),
-    /// 操作失败
+    #[error("Operation failed: {0}")]
     OperationFailed(String),
-    /// 设备未连接
+    #[error("Device is not connected")]
     NotConnected,
-    /// 无效的 UUID
+    #[error("Invalid UUID: {0}")]
     InvalidUuid(String),
-    /// 服务未找到
+    #[error("Service not found: {0}")]
     ServiceNotFound(String),
-    /// 特征值未找到
+    #[error("Characteristic not found: {0}")]
     CharacteristicNotFound(String),
-    /// 扫描失败
+    #[error("Scan failed: {0}")]
     ScanFailed(String),
-    /// 初始化失败
+    #[error("Initialization failed: {0}")]
     InitializationFailed(String),
-    /// 读取失败
+    #[error("Read failed: {0}")]
     ReadFailed(String),
-    /// 写入失败
+    #[error("Write failed: {0}")]
     WriteFailed(String),
-    /// 订阅失败
+    #[error("Subscribe failed: {0}")]
     SubscribeFailed(String),
-    /// 取消订阅失败
+    #[error("Unsubscribe failed: {0}")]
     UnsubscribeFailed(String),
-    /// 服务发现失败
+    #[error("Service discovery failed: {0}")]
     ServiceDiscoveryFailed(String),
-    /// 权限错误
+    #[error("Permission denied: {0}")]
     PermissionDenied(String),
-    /// 超时错误
+    #[error("Operation timed out: {0}")]
     Timeout(String),
-    /// 内部错误
+    #[error("Internal error: {0}")]
     InternalError(String),
 }
 
 impl BleError {
-    /// 转换为 GString (用于 Godot 信号)
-    pub fn to_gstring(&self) -> GString {
-        GString::from(self.to_string().as_str())
-    }
-
-    /// 转换为字符串描述
-    pub fn to_string(&self) -> String {
+    /// Preserves the 0.5.x Chinese signal text while structured events use Display.
+    pub fn legacy_message(&self) -> String {
         match self {
+            BleError::InvalidArgument(msg) => format!("参数无效: {}", msg),
+            BleError::Busy(msg) => format!("操作忙: {}", msg),
+            BleError::QueueFull => "操作队列已满，请稍后重试".to_string(),
+            BleError::Cancelled(msg) => format!("操作已取消: {}", msg),
+            BleError::AndroidNotInitialized(msg) => {
+                format!("Android 蓝牙桥未初始化: {}", msg)
+            }
+            BleError::AmbiguousCharacteristic(uuid) => {
+                format!("特征值 UUID 在多个服务中重复: {}", uuid)
+            }
+            BleError::NotInitialized => "蓝牙尚未初始化".to_string(),
             BleError::AdapterNotFound => "未找到蓝牙适配器，请确保系统蓝牙已启用".to_string(),
             BleError::DeviceNotFound(addr) => {
                 format!("未找到指定的蓝牙设备: {}", addr)
@@ -252,9 +273,16 @@ impl BleError {
         }
     }
 
-    /// 获取错误代码
+    /// Returns the stable machine-readable error code.
     pub fn error_code(&self) -> &str {
         match self {
+            BleError::InvalidArgument(_) => "INVALID_ARGUMENT",
+            BleError::Busy(_) => "BUSY",
+            BleError::QueueFull => "QUEUE_FULL",
+            BleError::Cancelled(_) => "CANCELLED",
+            BleError::AndroidNotInitialized(_) => "ANDROID_NOT_INITIALIZED",
+            BleError::AmbiguousCharacteristic(_) => "AMBIGUOUS_CHARACTERISTIC",
+            BleError::NotInitialized => "NOT_INITIALIZED",
             BleError::AdapterNotFound => "ADAPTER_NOT_FOUND",
             BleError::DeviceNotFound(_) => "DEVICE_NOT_FOUND",
             BleError::ConnectionFailed(_) => "CONNECTION_FAILED",
@@ -276,110 +304,24 @@ impl BleError {
         }
     }
 
+    pub fn code(&self) -> &str {
+        self.error_code()
+    }
+
     /// 判断错误是否可重试
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            BleError::Timeout(_) | BleError::ConnectionFailed(_) | BleError::OperationFailed(_)
+            BleError::Timeout(_)
+                | BleError::ConnectionFailed(_)
+                | BleError::OperationFailed(_)
+                | BleError::QueueFull
         )
     }
-
-    /// 记录错误到控制台（线程安全）
-    pub fn log_error(&self) {
-        eprintln!("[BLE Error] {}: {}", self.error_code(), self.to_string());
-    }
-
-    /// 记录警告到控制台（线程安全）
-    pub fn log_warning(&self) {
-        eprintln!("[BLE Warning] {}: {}", self.error_code(), self.to_string());
-    }
-}
-
-impl std::fmt::Display for BleError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
-    }
-}
-
-impl std::error::Error for BleError {}
-
-/// 设备事件枚举 - 用于从后台线程发送事件到主线程
-#[derive(Clone, Debug)]
-pub enum BleDeviceEvent {
-    /// 连接成功
-    ConnectSuccess { device_address: String },
-    /// 连接失败
-    ConnectFailed {
-        device_address: String,
-        error: String,
-    },
-    /// 断开连接
-    Disconnected { device_address: String },
-    /// 服务发现完成
-    ServicesDiscovered {
-        device_address: String,
-        services: Vec<BleServiceInfo>,
-    },
-    /// 服务发现失败
-    ServiceDiscoveryFailed {
-        device_address: String,
-        error: String,
-    },
-    /// 特征值读取完成
-    CharacteristicRead {
-        device_address: String,
-        char_uuid: String,
-        data: Vec<u8>,
-    },
-    /// 特征值读取失败
-    CharacteristicReadFailed {
-        device_address: String,
-        char_uuid: String,
-        error: String,
-    },
-    /// 特征值写入完成
-    CharacteristicWritten {
-        device_address: String,
-        char_uuid: String,
-    },
-    /// 特征值写入失败
-    CharacteristicWriteFailed {
-        device_address: String,
-        char_uuid: String,
-        error: String,
-    },
-    /// 特征值通知
-    CharacteristicNotified {
-        device_address: String,
-        char_uuid: String,
-        data: Vec<u8>,
-    },
-    /// 订阅成功
-    SubscribeSuccess {
-        device_address: String,
-        char_uuid: String,
-    },
-    /// 订阅失败
-    SubscribeFailed {
-        device_address: String,
-        char_uuid: String,
-        error: String,
-    },
-    /// 取消订阅成功
-    UnsubscribeSuccess {
-        device_address: String,
-        char_uuid: String,
-    },
-    /// 取消订阅失败
-    UnsubscribeFailed {
-        device_address: String,
-        char_uuid: String,
-        error: String,
-    },
 }
 
 /// 适配器信息结构
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdapterInfo {
     pub name: String,
     pub address: Option<String>,
@@ -405,10 +347,3 @@ impl AdapterInfo {
         dict
     }
 }
-
-// Re-export BLE service and characteristic types from their modules
-// These are used by other modules but not directly in this file
-#[allow(unused_imports)]
-pub use crate::ble_characteristic::{BleCharacteristicInfo, CharacteristicProperties};
-#[allow(unused_imports)]
-pub use crate::ble_service::BleServiceInfo;
