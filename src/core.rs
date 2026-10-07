@@ -4,11 +4,12 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 use crate::backend::{
     BackendEvent, BackendEventStream, BackendNotification, BleBackend, BtleplugBackend,
@@ -20,664 +21,36 @@ pub const COMMAND_CHANNEL_CAPACITY: usize = 64;
 pub const EVENT_CHANNEL_CAPACITY: usize = 1024;
 const INTERNAL_CHANNEL_CAPACITY: usize = 256;
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct DeviceId(String);
+mod client;
+mod protocol;
+use client::ScanControl;
+pub use client::{CoreClient, CoreRuntime, Submission};
+pub use protocol::*;
 
-impl DeviceId {
-    pub fn parse(value: &str) -> Result<Self, BleError> {
-        let value = value.trim();
-        if value.is_empty() {
-            return Err(BleError::InvalidArgument(
-                "device address is empty".to_string(),
-            ));
-        }
-        Ok(Self(value.to_ascii_lowercase()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+#[derive(Clone, Copy)]
+struct CoreOptions {
+    operation_timeout: Duration,
+    shutdown_timeout: Duration,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct GattKey {
-    service_uuid: String,
-    characteristic_uuid: String,
-}
-
-impl GattKey {
-    pub fn parse(service_uuid: &str, characteristic_uuid: &str) -> Result<Self, BleError> {
-        Ok(Self {
-            service_uuid: canonical_uuid(service_uuid)?,
-            characteristic_uuid: canonical_uuid(characteristic_uuid)?,
-        })
-    }
-
-    pub fn service_uuid(&self) -> &str {
-        &self.service_uuid
-    }
-
-    pub fn characteristic_uuid(&self) -> &str {
-        &self.characteristic_uuid
-    }
-}
-
-fn canonical_uuid(value: &str) -> Result<String, BleError> {
-    let value = value.trim();
-    Uuid::parse_str(value)
-        .map(|uuid| uuid.hyphenated().to_string())
-        .map_err(|_| BleError::InvalidUuid(value.to_string()))
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct OperationId(i64);
-
-impl OperationId {
-    pub const UNSOLICITED: Self = Self(0);
-
-    pub const fn new(value: i64) -> Self {
-        Self(value)
-    }
-
-    pub const fn get(self) -> i64 {
-        self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Operation {
-    Initialize,
-    Scan,
-    Connect,
-    Disconnect,
-    DiscoverServices,
-    Read,
-    Write,
-    Subscribe,
-    Unsubscribe,
-    Notification,
-    ResolveDevice,
-}
-
-impl Operation {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Initialize => "initialize",
-            Self::Scan => "scan",
-            Self::Connect => "connect",
-            Self::Disconnect => "disconnect",
-            Self::DiscoverServices => "discover_services",
-            Self::Read => "read",
-            Self::Write => "write",
-            Self::Subscribe => "subscribe",
-            Self::Unsubscribe => "unsubscribe",
-            Self::Notification => "notification",
-            Self::ResolveDevice => "resolve_device",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Phase {
-    Started,
-    Progress,
-    Succeeded,
-    Failed,
-    Cancelled,
-    Received,
-}
-
-impl Phase {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Started => "started",
-            Self::Progress => "progress",
-            Self::Succeeded => "succeeded",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-            Self::Received => "received",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct EventContext {
-    pub device_address: String,
-    pub service_uuid: String,
-    pub characteristic_uuid: String,
-}
-
-impl EventContext {
-    pub fn for_device(device: &DeviceId) -> Self {
+impl Default for CoreOptions {
+    fn default() -> Self {
         Self {
-            device_address: device.as_str().to_string(),
-            ..Self::default()
-        }
-    }
-
-    pub fn for_gatt(device: &DeviceId, key: &GattKey) -> Self {
-        Self {
-            device_address: device.as_str().to_string(),
-            service_uuid: key.service_uuid.clone(),
-            characteristic_uuid: key.characteristic_uuid.clone(),
+            operation_timeout: Duration::from_secs(30),
+            shutdown_timeout: Duration::from_secs(2),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DeviceProgressKind {
-    Discovered,
-    Updated,
-}
-
-impl DeviceProgressKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Discovered => "discovered",
-            Self::Updated => "updated",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub enum EventData {
-    #[default]
-    None,
-    Adapter(AdapterInfo),
-    Device {
-        kind: DeviceProgressKind,
-        info: DeviceInfo,
-    },
-    Services(Vec<BleServiceInfo>),
-    Bytes(Vec<u8>),
-    Reason(String),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct EventError {
-    pub code: String,
-    pub message: String,
-    pub retryable: bool,
-    pub details: HashMap<String, String>,
-    pub legacy_message: String,
-}
-
-impl From<BleError> for EventError {
-    fn from(error: BleError) -> Self {
-        Self {
-            code: error.code().to_string(),
-            message: error.to_string(),
-            retryable: error.is_retryable(),
-            details: HashMap::new(),
-            legacy_message: error.legacy_message(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BleEvent {
-    pub operation: Operation,
-    pub phase: Phase,
-    pub operation_id: OperationId,
-    pub terminal: bool,
-    pub context: EventContext,
-    pub data: EventData,
-    pub error: Option<EventError>,
-}
-
-impl BleEvent {
-    pub fn started(operation: Operation, operation_id: OperationId, context: EventContext) -> Self {
-        Self::new(operation, Phase::Started, operation_id, false, context)
-    }
-
-    pub fn progress(operation_id: OperationId, context: EventContext, data: EventData) -> Self {
-        Self {
-            operation: Operation::Scan,
-            phase: Phase::Progress,
-            operation_id,
-            terminal: false,
-            context,
-            data,
-            error: None,
-        }
-    }
-
-    pub fn succeeded(
-        operation: Operation,
-        operation_id: OperationId,
-        context: EventContext,
-        data: EventData,
-    ) -> Self {
-        let mut event = Self::new(operation, Phase::Succeeded, operation_id, true, context);
-        event.data = data;
-        event
-    }
-
-    pub fn failed(
-        operation: Operation,
-        operation_id: OperationId,
-        context: EventContext,
-        error: BleError,
-    ) -> Self {
-        let phase = if matches!(error, BleError::Cancelled(_)) {
-            Phase::Cancelled
-        } else {
-            Phase::Failed
-        };
-        let mut event = Self::new(operation, phase, operation_id, true, context);
-        event.error = Some(error.into());
-        event
-    }
-
-    pub fn received(operation: Operation, context: EventContext, data: EventData) -> Self {
-        let mut event = Self::new(
-            operation,
-            Phase::Received,
-            OperationId::UNSOLICITED,
-            false,
-            context,
-        );
-        event.data = data;
-        event
-    }
-
-    fn new(
-        operation: Operation,
-        phase: Phase,
-        operation_id: OperationId,
-        terminal: bool,
-        context: EventContext,
-    ) -> Self {
-        Self {
-            operation,
-            phase,
-            operation_id,
-            terminal,
-            context,
-            data: EventData::None,
-            error: None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ScanGeneration(u64);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ActiveScan {
-    generation: ScanGeneration,
-    operation_id: OperationId,
-    timeout: Option<Duration>,
-}
-
-#[derive(Debug, Default)]
-pub struct ScanSession {
-    generation: u64,
-    active: Option<ActiveScan>,
-}
-
-impl ScanSession {
-    pub fn start(
-        &mut self,
-        operation_id: OperationId,
-        timeout: Option<Duration>,
-    ) -> Result<ScanGeneration, BleError> {
-        if self.active.is_some() {
-            return Err(BleError::Busy("scan already active".to_string()));
-        }
-        self.generation = self.generation.wrapping_add(1);
-        let generation = ScanGeneration(self.generation);
-        self.active = Some(ActiveScan {
-            generation,
-            operation_id,
-            timeout,
-        });
-        Ok(generation)
-    }
-
-    pub fn finish(&mut self, generation: ScanGeneration) -> Result<bool, BleError> {
-        if self.active.map(|active| active.generation) != Some(generation) {
-            return Ok(false);
-        }
-        self.active = None;
-        Ok(true)
-    }
-
-    pub fn active_generation(&self) -> Option<ScanGeneration> {
-        self.active.map(|active| active.generation)
-    }
-
-    fn active(&self) -> Option<ActiveScan> {
-        self.active
-    }
-}
-
-#[derive(Clone)]
-pub struct CoreClient {
-    command_tx: mpsc::Sender<CoreCommand>,
-    event_tx: mpsc::Sender<BleEvent>,
-    next_operation_id: Arc<AtomicI64>,
-}
-
-impl CoreClient {
-    pub fn initialize(&self) -> OperationId {
-        self.submit(
-            Operation::Initialize,
-            EventContext::default(),
-            |operation_id| CoreCommand::Initialize { operation_id },
-        )
-    }
-
-    pub fn start_scan(&self, timeout: Option<Duration>) -> OperationId {
-        self.submit(Operation::Scan, EventContext::default(), |operation_id| {
-            CoreCommand::StartScan {
-                operation_id,
-                timeout,
-            }
-        })
-    }
-
-    pub fn stop_scan(&self, operation_id: OperationId) -> OperationId {
-        if operation_id != OperationId::UNSOLICITED {
-            let _ = self
-                .command_tx
-                .try_send(CoreCommand::StopScan { operation_id });
-        }
-        operation_id
-    }
-
-    pub fn connect(&self, address: &str) -> OperationId {
-        self.device_command(Operation::Connect, address, |operation_id, device| {
-            CoreCommand::Device {
-                operation_id,
-                device,
-                action: DeviceAction::Connect,
-            }
-        })
-    }
-
-    pub fn disconnect(&self, address: &str) -> OperationId {
-        self.device_command(Operation::Disconnect, address, |operation_id, device| {
-            CoreCommand::Device {
-                operation_id,
-                device,
-                action: DeviceAction::Disconnect,
-            }
-        })
-    }
-
-    pub fn discover_services(&self, address: &str) -> OperationId {
-        self.device_command(
-            Operation::DiscoverServices,
-            address,
-            |operation_id, device| CoreCommand::Device {
-                operation_id,
-                device,
-                action: DeviceAction::DiscoverServices,
-            },
-        )
-    }
-
-    pub fn read(
-        &self,
-        address: &str,
-        service_uuid: &str,
-        characteristic_uuid: &str,
-    ) -> OperationId {
-        self.gatt_command(
-            Operation::Read,
-            address,
-            service_uuid,
-            characteristic_uuid,
-            |operation_id, device, key| CoreCommand::Device {
-                operation_id,
-                device,
-                action: DeviceAction::Read(key),
-            },
-        )
-    }
-
-    pub fn write(
-        &self,
-        address: &str,
-        service_uuid: &str,
-        characteristic_uuid: &str,
-        data: Vec<u8>,
-        with_response: bool,
-    ) -> OperationId {
-        self.gatt_command(
-            Operation::Write,
-            address,
-            service_uuid,
-            characteristic_uuid,
-            move |operation_id, device, key| CoreCommand::Device {
-                operation_id,
-                device,
-                action: DeviceAction::Write {
-                    key,
-                    data,
-                    with_response,
-                },
-            },
-        )
-    }
-
-    pub fn reject(
-        &self,
-        operation: Operation,
-        context: EventContext,
-        error: BleError,
-    ) -> OperationId {
-        let operation_id = self.next_id();
-        self.emit_local_failure(operation, operation_id, context, error);
-        operation_id
-    }
-
-    pub fn subscribe(
-        &self,
-        address: &str,
-        service_uuid: &str,
-        characteristic_uuid: &str,
-    ) -> OperationId {
-        self.gatt_command(
-            Operation::Subscribe,
-            address,
-            service_uuid,
-            characteristic_uuid,
-            |operation_id, device, key| CoreCommand::Device {
-                operation_id,
-                device,
-                action: DeviceAction::Subscribe(key),
-            },
-        )
-    }
-
-    pub fn unsubscribe(
-        &self,
-        address: &str,
-        service_uuid: &str,
-        characteristic_uuid: &str,
-    ) -> OperationId {
-        self.gatt_command(
-            Operation::Unsubscribe,
-            address,
-            service_uuid,
-            characteristic_uuid,
-            |operation_id, device, key| CoreCommand::Device {
-                operation_id,
-                device,
-                action: DeviceAction::Unsubscribe(key),
-            },
-        )
-    }
-
-    fn next_id(&self) -> OperationId {
-        OperationId::new(
-            self.next_operation_id
-                .fetch_add(1, Ordering::Relaxed)
-                .max(1),
-        )
-    }
-
-    fn submit(
-        &self,
-        operation: Operation,
-        context: EventContext,
-        command: impl FnOnce(OperationId) -> CoreCommand,
-    ) -> OperationId {
-        let operation_id = self.next_id();
-        if self.command_tx.try_send(command(operation_id)).is_err() {
-            self.emit_local_failure(operation, operation_id, context, BleError::QueueFull);
-        }
-        operation_id
-    }
-
-    fn device_command(
-        &self,
-        operation: Operation,
-        address: &str,
-        command: impl FnOnce(OperationId, DeviceId) -> CoreCommand,
-    ) -> OperationId {
-        let operation_id = self.next_id();
-        match DeviceId::parse(address) {
-            Ok(device) => {
-                let context = EventContext::for_device(&device);
-                if self
-                    .command_tx
-                    .try_send(command(operation_id, device))
-                    .is_err()
-                {
-                    self.emit_local_failure(operation, operation_id, context, BleError::QueueFull);
-                }
-            }
-            Err(error) => {
-                self.emit_local_failure(operation, operation_id, EventContext::default(), error)
-            }
-        }
-        operation_id
-    }
-
-    fn gatt_command(
-        &self,
-        operation: Operation,
-        address: &str,
-        service_uuid: &str,
-        characteristic_uuid: &str,
-        command: impl FnOnce(OperationId, DeviceId, GattKey) -> CoreCommand,
-    ) -> OperationId {
-        let operation_id = self.next_id();
-        let parsed = DeviceId::parse(address).and_then(|device| {
-            GattKey::parse(service_uuid, characteristic_uuid).map(|key| (device, key))
-        });
-        match parsed {
-            Ok((device, key)) => {
-                let context = EventContext::for_gatt(&device, &key);
-                if self
-                    .command_tx
-                    .try_send(command(operation_id, device, key))
-                    .is_err()
-                {
-                    self.emit_local_failure(operation, operation_id, context, BleError::QueueFull);
-                }
-            }
-            Err(error) => {
-                self.emit_local_failure(operation, operation_id, EventContext::default(), error)
-            }
-        }
-        operation_id
-    }
-
-    fn emit_local_failure(
-        &self,
-        operation: Operation,
-        operation_id: OperationId,
-        context: EventContext,
-        error: BleError,
-    ) {
-        let _ = self
-            .event_tx
-            .try_send(BleEvent::failed(operation, operation_id, context, error));
-    }
-}
-
-pub struct CoreRuntime {
-    client: CoreClient,
-    event_rx: mpsc::Receiver<BleEvent>,
-    shutdown: CancellationToken,
-    worker: Option<JoinHandle<()>>,
-}
-
-impl CoreRuntime {
-    pub fn spawn_production() -> Self {
-        Self::spawn_with_backend(Arc::new(BtleplugBackend::default()))
-    }
-
-    pub fn spawn_with_backend<B>(backend: Arc<B>) -> Self
-    where
-        B: BleBackend + 'static,
-    {
-        let (command_tx, command_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
-        let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
-        let client = CoreClient {
-            command_tx,
-            event_tx: event_tx.clone(),
-            next_operation_id: Arc::new(AtomicI64::new(1)),
-        };
-        let backend: Arc<dyn BleBackend> = backend;
-        let shutdown = CancellationToken::new();
-        let worker_shutdown = shutdown.clone();
-        let worker = std::thread::Builder::new()
-            .name("gdble-core".to_string())
-            .spawn(move || {
-                let runtime = match tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(runtime) => runtime,
-                    Err(error) => {
-                        eprintln!("[GDBLE] Failed to create Tokio runtime: {error}");
-                        return;
-                    }
-                };
-                let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
-                let core_task = runtime.spawn(async move {
-                    run_core(backend, command_rx, event_tx, worker_shutdown).await;
-                    let _ = done_tx.send(());
-                });
-                let _ = done_rx.recv();
-                drop(core_task);
-            })
-            .unwrap_or_else(|error| panic!("failed to spawn GDBLE core thread: {error}"));
-        Self {
-            client,
-            event_rx,
-            shutdown,
-            worker: Some(worker),
-        }
-    }
-
-    pub fn client(&self) -> CoreClient {
-        self.client.clone()
-    }
-
-    pub fn try_recv(&mut self) -> Option<BleEvent> {
-        self.event_rx.try_recv().ok()
-    }
-
-    pub fn shutdown(&mut self) {
-        if let Some(worker) = self.worker.take() {
-            self.shutdown.cancel();
-            let _ = self.client.command_tx.try_send(CoreCommand::Shutdown);
-            if worker.join().is_err() {
-                eprintln!("[GDBLE] Core worker panicked during shutdown");
-            }
-        }
-    }
-}
-
-impl Drop for CoreRuntime {
-    fn drop(&mut self) {
-        self.shutdown();
+async fn guarded<T>(
+    name: &str,
+    deadline: Duration,
+    future: impl Future<Output = Result<T, BleError>>,
+) -> Result<T, BleError> {
+    match tokio::time::timeout(deadline, AssertUnwindSafe(future).catch_unwind()).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err(BleError::InternalError(format!("{name} panicked"))),
+        Err(_) => Err(BleError::Timeout(name.to_string())),
     }
 }
 
@@ -688,16 +61,13 @@ enum CoreCommand {
     StartScan {
         operation_id: OperationId,
         timeout: Option<Duration>,
-    },
-    StopScan {
-        operation_id: OperationId,
+        cancellation: CancellationToken,
     },
     Device {
         operation_id: OperationId,
         device: DeviceId,
         action: DeviceAction,
     },
-    Shutdown,
 }
 
 #[derive(Clone, Debug)]
@@ -744,7 +114,14 @@ enum InternalEvent {
         operation_id: OperationId,
         result: Result<(AdapterInfo, BackendEventStream), BleError>,
     },
-    Backend(Result<BackendEvent, BleError>),
+    Backend {
+        generation: u64,
+        result: Result<BackendEvent, BleError>,
+    },
+    AdapterStreamEnded {
+        generation: u64,
+        error: BleError,
+    },
     ScanStarted {
         operation_id: OperationId,
         generation: ScanGeneration,
@@ -768,6 +145,7 @@ enum InternalEvent {
     },
     Notification {
         device: DeviceId,
+        generation: u64,
         notification: BackendNotification,
     },
     NotificationPumpFailed {
@@ -805,14 +183,6 @@ impl Default for ScanRuntimeState {
             stop_requested: false,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ConnectionState {
-    Disconnected,
-    Connecting,
-    Connected,
-    Disconnecting,
 }
 
 struct InFlightOperation {
@@ -864,13 +234,18 @@ struct CoreState {
     known_devices: HashMap<DeviceId, DeviceInfo>,
     devices: HashMap<DeviceId, DeviceSession>,
     shutdown: CancellationToken,
+    scan_control: Arc<ScanControl>,
+    options: CoreOptions,
+    adapter_generation: u64,
 }
 
 async fn run_core(
     backend: Arc<dyn BleBackend>,
     mut command_rx: mpsc::Receiver<CoreCommand>,
     event_tx: mpsc::Sender<BleEvent>,
+    scan_control: Arc<ScanControl>,
     shutdown: CancellationToken,
+    options: CoreOptions,
 ) {
     let (internal_tx, mut internal_rx) = mpsc::channel(INTERNAL_CHANNEL_CAPACITY);
     let mut state = CoreState {
@@ -884,6 +259,9 @@ async fn run_core(
         known_devices: HashMap::new(),
         devices: HashMap::new(),
         shutdown: shutdown.clone(),
+        scan_control: scan_control.clone(),
+        options,
+        adapter_generation: 0,
     };
     let mut tasks = JoinSet::new();
     loop {
@@ -894,11 +272,18 @@ async fn run_core(
             }
             command = command_rx.recv() => {
                 match command {
-                    Some(CoreCommand::Shutdown) | None => {
+                    None => {
                         state.shutdown(&mut tasks).await;
                         break;
                     }
                     Some(command) => state.handle_command(command, &mut tasks).await,
+                }
+            }
+            () = scan_control.changed() => {
+                if let Some(active) = state.scan.tracker.active() {
+                    if state.scan.cancellation.as_ref().is_some_and(CancellationToken::is_cancelled) {
+                        state.stop_scan(active.operation_id, "stopped", &mut tasks).await;
+                    }
                 }
             }
             internal = internal_rx.recv() => {
@@ -922,11 +307,10 @@ impl CoreState {
             CoreCommand::StartScan {
                 operation_id,
                 timeout,
+                cancellation,
             } => {
-                self.start_scan(operation_id, timeout, tasks).await;
-            }
-            CoreCommand::StopScan { operation_id } => {
-                self.stop_scan(operation_id, "stopped", tasks).await;
+                self.start_scan(operation_id, timeout, cancellation, tasks)
+                    .await;
             }
             CoreCommand::Device {
                 operation_id,
@@ -936,7 +320,6 @@ impl CoreState {
                 self.device_command(operation_id, device, action, tasks)
                     .await;
             }
-            CoreCommand::Shutdown => {}
         }
     }
 
@@ -975,8 +358,9 @@ impl CoreState {
         .await;
         let backend = self.backend.clone();
         let internal_tx = self.internal_tx.clone();
+        let deadline = self.options.operation_timeout;
         tasks.spawn(async move {
-            let result = backend.initialize().await;
+            let result = guarded("initialize", deadline, backend.initialize()).await;
             let _ = internal_tx
                 .send(InternalEvent::Initialized {
                     operation_id,
@@ -990,6 +374,7 @@ impl CoreState {
         &mut self,
         operation_id: OperationId,
         timeout: Option<Duration>,
+        cancellation: CancellationToken,
         tasks: &mut JoinSet<()>,
     ) {
         if !self.initialized {
@@ -1016,12 +401,13 @@ impl CoreState {
             }
         };
         self.scan.status = ScanStatus::Starting;
-        self.scan.stop_requested = false;
-        self.scan.cancellation = Some(CancellationToken::new());
+        self.scan.stop_requested = cancellation.is_cancelled();
+        self.scan.cancellation = Some(cancellation);
         let backend = self.backend.clone();
         let internal_tx = self.internal_tx.clone();
+        let deadline = self.options.operation_timeout;
         tasks.spawn(async move {
-            let result = backend.start_scan().await;
+            let result = guarded("start_scan", deadline, backend.start_scan()).await;
             let _ = internal_tx
                 .send(InternalEvent::ScanStarted {
                     operation_id,
@@ -1061,8 +447,9 @@ impl CoreState {
         self.scan.status = ScanStatus::Stopping;
         let backend = self.backend.clone();
         let internal_tx = self.internal_tx.clone();
+        let deadline = self.options.operation_timeout;
         tasks.spawn(async move {
-            let result = backend.stop_scan().await;
+            let result = guarded("stop_scan", deadline, backend.stop_scan()).await;
             let _ = internal_tx
                 .send(InternalEvent::ScanStopped {
                     operation_id: active.operation_id,
@@ -1173,10 +560,14 @@ impl CoreState {
             let internal_tx = self.internal_tx.clone();
             let device_for_task = device.clone();
             let action_for_task = action.clone();
+            let deadline = self.options.operation_timeout;
             let abort_handle = tasks.spawn(async move {
-                let result =
-                    execute_device_action(backend.as_ref(), &device_for_task, &action_for_task)
-                        .await;
+                let result = guarded(
+                    operation.as_str(),
+                    deadline,
+                    execute_device_action(backend.as_ref(), &device_for_task, &action_for_task),
+                )
+                .await;
                 let _ = internal_tx
                     .send(InternalEvent::DeviceCompleted {
                         operation_id,
@@ -1224,11 +615,11 @@ impl CoreState {
                 return Some(Ok(EventData::Reason("already_subscribed".to_string())));
             }
             if subscriptions.iter().any(|existing| {
-                existing.characteristic_uuid == key.characteristic_uuid
-                    && existing.service_uuid != key.service_uuid
+                existing.characteristic_uuid() == key.characteristic_uuid()
+                    && existing.service_uuid() != key.service_uuid()
             }) {
                 return Some(Err(BleError::AmbiguousCharacteristic(
-                    key.characteristic_uuid.clone(),
+                    key.characteristic_uuid().to_string(),
                 )));
             }
         }
@@ -1241,7 +632,14 @@ impl CoreState {
                 operation_id,
                 result,
             } => self.initialized(operation_id, result, tasks).await,
-            InternalEvent::Backend(result) => self.backend_event(result, tasks).await,
+            InternalEvent::Backend { generation, result } => {
+                if self.initialized && generation == self.adapter_generation {
+                    self.backend_event(result, tasks).await;
+                }
+            }
+            InternalEvent::AdapterStreamEnded { generation, error } => {
+                self.adapter_stream_ended(generation, error, tasks).await;
+            }
             InternalEvent::ScanStarted {
                 operation_id,
                 generation,
@@ -1278,27 +676,30 @@ impl CoreState {
             }
             InternalEvent::Notification {
                 device,
+                generation,
                 notification,
-            } => self.notification(device, notification).await,
+            } => {
+                self.notification(device, generation, notification).await;
+            }
             InternalEvent::NotificationPumpFailed {
                 device,
                 generation,
                 error,
             } => {
-                self.finish_notification_pump(&device, generation);
-                self.emit(BleEvent {
-                    operation: Operation::Notification,
-                    phase: Phase::Failed,
-                    operation_id: OperationId::UNSOLICITED,
-                    terminal: false,
-                    context: EventContext::for_device(&device),
-                    data: EventData::None,
-                    error: Some(error.into()),
-                })
-                .await;
+                if self.finish_notification_pump(&device, generation) {
+                    self.notification_failure(&device, error).await;
+                }
             }
             InternalEvent::NotificationPumpEnded { device, generation } => {
-                self.finish_notification_pump(&device, generation);
+                if self.finish_notification_pump(&device, generation) {
+                    self.notification_failure(
+                        &device,
+                        BleError::OperationFailed(
+                            "notification stream ended; subscribe again to restart it".to_string(),
+                        ),
+                    )
+                    .await;
+                }
             }
         }
     }
@@ -1321,16 +722,38 @@ impl CoreState {
                     EventData::Adapter(adapter_info),
                 ))
                 .await;
+                self.adapter_generation = self.adapter_generation.wrapping_add(1);
+                let generation = self.adapter_generation;
                 let internal_tx = self.internal_tx.clone();
+                let shutdown = self.shutdown.clone();
                 tasks.spawn(async move {
-                    while let Some(event) = stream.next().await {
-                        if internal_tx
-                            .send(InternalEvent::Backend(event))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
+                    loop {
+                        let next = tokio::select! {
+                            () = shutdown.cancelled() => return,
+                            next = AssertUnwindSafe(stream.next()).catch_unwind() => next,
+                        };
+                        let error = match next {
+                            Ok(Some(result)) => {
+                                if internal_tx
+                                    .send(InternalEvent::Backend { generation, result })
+                                    .await
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                                continue;
+                            }
+                            Ok(None) => BleError::OperationFailed(
+                                "adapter event stream ended; initialize again".to_string(),
+                            ),
+                            Err(_) => {
+                                BleError::InternalError("adapter event stream panicked".to_string())
+                            }
+                        };
+                        let _ = internal_tx
+                            .send(InternalEvent::AdapterStreamEnded { generation, error })
+                            .await;
+                        return;
                     }
                 });
             }
@@ -1365,7 +788,13 @@ impl CoreState {
                     EventContext::default(),
                 ))
                 .await;
-                if self.scan.stop_requested {
+                if self.scan.stop_requested
+                    || self
+                        .scan
+                        .cancellation
+                        .as_ref()
+                        .is_some_and(CancellationToken::is_cancelled)
+                {
                     if let Some(active) = self.scan.tracker.active() {
                         self.spawn_scan_stop(active, "stopped".to_string(), tasks);
                     }
@@ -1457,6 +886,8 @@ impl CoreState {
                     context: EventContext::default(),
                     data: EventData::None,
                     error: Some(error.into()),
+                    connection_state: None,
+                    adapter_initialized: None,
                 })
                 .await;
             }
@@ -1507,6 +938,7 @@ impl CoreState {
             }
             session.notification_generation = session.notification_generation.wrapping_add(1);
             session.subscriptions.clear();
+            session.services.clear();
             cancelled_pending.extend(session.pending.drain(..));
         }
         if let Some((operation, operation_id, context)) = cancelled {
@@ -1570,6 +1002,7 @@ impl CoreState {
                             session.notification_generation =
                                 session.notification_generation.wrapping_add(1);
                             session.subscriptions.clear();
+                            session.services.clear();
                         }
                         DeviceAction::DiscoverServices => {
                             if let EventData::Services(services) = &data {
@@ -1620,60 +1053,104 @@ impl CoreState {
         let Some(session) = self.devices.get_mut(device) else {
             return;
         };
-        if session.notification_cancellation.is_some() {
+        if session.subscriptions.is_empty() || session.notification_cancellation.is_some() {
             return;
         }
-        let cancellation = CancellationToken::new();
-        session.notification_cancellation = Some(cancellation.clone());
         session.notification_generation = session.notification_generation.wrapping_add(1);
         let generation = session.notification_generation;
+        let cancellation = CancellationToken::new();
+        session.notification_cancellation = Some(cancellation.clone());
         let backend = self.backend.clone();
         let internal_tx = self.internal_tx.clone();
         let device = device.clone();
+        let deadline = self.options.operation_timeout;
         tasks.spawn(async move {
-            let mut stream = match backend.notifications(&device).await {
-                Ok(stream) => stream,
-                Err(error) => {
-                    let _ = internal_tx.send(InternalEvent::NotificationPumpFailed { device, generation, error }).await;
+            let mut stream =
+                match guarded("notifications", deadline, backend.notifications(&device)).await {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        let _ = internal_tx
+                            .send(InternalEvent::NotificationPumpFailed {
+                                device,
+                                generation,
+                                error,
+                            })
+                            .await;
+                        return;
+                    }
+                };
+            loop {
+                let next = tokio::select! {
+                    () = cancellation.cancelled() => return,
+                    next = AssertUnwindSafe(stream.next()).catch_unwind() => next,
+                };
+                let event = match next {
+                    Ok(Some(Ok(notification))) => InternalEvent::Notification {
+                        device: device.clone(),
+                        generation,
+                        notification,
+                    },
+                    Ok(Some(Err(error))) => InternalEvent::NotificationPumpFailed {
+                        device: device.clone(),
+                        generation,
+                        error,
+                    },
+                    Err(_) => InternalEvent::NotificationPumpFailed {
+                        device: device.clone(),
+                        generation,
+                        error: BleError::InternalError("notification stream panicked".to_string()),
+                    },
+                    Ok(None) => InternalEvent::NotificationPumpEnded {
+                        device: device.clone(),
+                        generation,
+                    },
+                };
+                let ended = !matches!(event, InternalEvent::Notification { .. });
+                if internal_tx.send(event).await.is_err() || ended {
                     return;
                 }
-            };
-            loop {
-                tokio::select! {
-                    () = cancellation.cancelled() => break,
-                    notification = stream.next() => match notification {
-                        Some(Ok(notification)) => {
-                            if internal_tx.send(InternalEvent::Notification { device: device.clone(), notification }).await.is_err() { break; }
-                        }
-                        Some(Err(error)) => {
-                            let _ = internal_tx.send(InternalEvent::NotificationPumpFailed { device: device.clone(), generation, error }).await;
-                            return;
-                        }
-                        None => break,
-                    }
-                }
             }
-            let _ = internal_tx.send(InternalEvent::NotificationPumpEnded { device, generation }).await;
         });
     }
 
-    fn finish_notification_pump(&mut self, device: &DeviceId, generation: u64) {
-        if let Some(session) = self.devices.get_mut(device) {
-            if session.notification_generation == generation {
-                session.notification_cancellation = None;
-            }
-        }
+    fn finish_notification_pump(&mut self, device: &DeviceId, generation: u64) -> bool {
+        self.devices.get_mut(device).is_some_and(|session| {
+            session.notification_generation == generation
+                && session.notification_cancellation.take().is_some()
+        })
     }
 
-    async fn notification(&mut self, device: DeviceId, notification: BackendNotification) {
+    async fn notification_failure(&self, device: &DeviceId, error: BleError) {
+        let mut event = BleEvent::failed(
+            Operation::Notification,
+            OperationId::UNSOLICITED,
+            EventContext::for_device(device),
+            error,
+        );
+        event.terminal = false;
+        self.emit(event).await;
+    }
+
+    async fn notification(
+        &mut self,
+        device: DeviceId,
+        generation: u64,
+        notification: BackendNotification,
+    ) {
         let Some(session) = self.devices.get(&device) else {
             return;
         };
+        if session.notification_generation != generation
+            || session.state != ConnectionState::Connected
+            || session.notification_cancellation.is_none()
+        {
+            return;
+        }
         let characteristic_uuid = notification.characteristic_uuid.to_ascii_lowercase();
         let Some(key) = session
             .subscriptions
             .iter()
-            .find(|key| key.characteristic_uuid == characteristic_uuid)
+            .find(|key| key.characteristic_uuid() == characteristic_uuid)
         else {
             return;
         };
@@ -1685,30 +1162,116 @@ impl CoreState {
         self.emit(event).await;
     }
 
-    async fn shutdown(&mut self, tasks: &mut JoinSet<()>) {
-        if let Some(cancellation) = self.scan.cancellation.take() {
-            cancellation.cancel();
+    async fn adapter_stream_ended(
+        &mut self,
+        generation: u64,
+        error: BleError,
+        tasks: &mut JoinSet<()>,
+    ) {
+        if generation != self.adapter_generation || !self.initialized {
+            return;
         }
-        if self.scan.tracker.active().is_some() {
-            let _ = self.backend.stop_scan().await;
-        }
-        for (device, session) in &mut self.devices {
-            if let Some(in_flight) = session.in_flight.take() {
-                in_flight.abort_handle.abort();
-            }
-            if let Some(cancellation) = session.notification_cancellation.take() {
-                cancellation.cancel();
-            }
-            session.pending.clear();
-            if session.state == ConnectionState::Connected {
-                let _ = self.backend.disconnect(device).await;
-            }
-        }
+        self.initialized = false;
+        self.adapter_info = None;
+        self.known_devices.clear();
+        let active_scan = self.scan.tracker.active();
+        let connected_devices = self.cleanup_devices();
         tasks.abort_all();
-        while tasks.join_next().await.is_some() {}
+        // Finish old backend work before accepting a new adapter session.
+        self.cleanup_backend(tasks, active_scan.is_some(), &connected_devices)
+            .await;
+        if let Some(active) = self.scan.tracker.active() {
+            if let Some(token) = self.scan.cancellation.take() {
+                token.cancel();
+            }
+            let _ = self.scan.tracker.finish(active.generation);
+            self.scan.status = ScanStatus::Idle;
+            self.scan.stop_requested = false;
+            self.emit(BleEvent::failed(
+                Operation::Scan,
+                active.operation_id,
+                EventContext::default(),
+                BleError::Cancelled("adapter event stream ended".to_string()),
+            ))
+            .await;
+        }
+        let devices: Vec<_> = self.devices.keys().cloned().collect();
+        for device in devices {
+            self.remote_disconnect(device, tasks).await;
+        }
+        let mut event = BleEvent::failed(
+            Operation::Initialize,
+            OperationId::UNSOLICITED,
+            EventContext::default(),
+            error,
+        );
+        event.terminal = false;
+        self.emit(event).await;
     }
 
-    async fn emit(&self, event: BleEvent) {
+    async fn shutdown(&mut self, tasks: &mut JoinSet<()>) {
+        let scan_active = self.scan.tracker.active().is_some();
+        let devices = self.cleanup_devices();
+        if let Some(token) = self.scan.cancellation.take() {
+            token.cancel();
+        }
+        for session in self.devices.values_mut() {
+            if let Some(operation) = session.in_flight.take() {
+                operation.abort_handle.abort();
+            }
+            if let Some(token) = session.notification_cancellation.take() {
+                token.cancel();
+            }
+            session.pending.clear();
+        }
+        tasks.abort_all();
+        self.cleanup_backend(tasks, scan_active, &devices).await;
+    }
+
+    fn cleanup_devices(&self) -> Vec<DeviceId> {
+        self.devices
+            .iter()
+            .filter(|(_, session)| session.state != ConnectionState::Disconnected)
+            .map(|(device, _)| device.clone())
+            .collect()
+    }
+
+    async fn cleanup_backend(
+        &self,
+        tasks: &mut JoinSet<()>,
+        scan_active: bool,
+        devices: &[DeviceId],
+    ) {
+        let budget = self.options.shutdown_timeout;
+        let _ = tokio::time::timeout(budget, async {
+            while tasks.join_next().await.is_some() {}
+            let stop = async {
+                if scan_active {
+                    let _ = guarded("cleanup scan", budget, self.backend.stop_scan()).await;
+                }
+            };
+            let disconnect = futures::future::join_all(devices.iter().map(|device| {
+                guarded(
+                    "cleanup disconnect",
+                    budget,
+                    self.backend.disconnect(device),
+                )
+            }));
+            tokio::join!(stop, disconnect);
+        })
+        .await;
+    }
+
+    async fn emit(&self, mut event: BleEvent) {
+        if event.operation == Operation::Initialize {
+            event.adapter_initialized = Some(self.initialized);
+        }
+        if event.operation == Operation::Scan && event.terminal {
+            self.scan_control.finish(event.operation_id);
+        }
+        if let Ok(device) = DeviceId::parse(&event.context.device_address) {
+            event.connection_state = self.devices.get(&device).map(|session| session.state);
+        }
         tokio::select! {
             result = self.event_tx.send(event) => { let _ = result; }
             () = self.shutdown.cancelled() => {}
@@ -1749,504 +1312,7 @@ async fn execute_device_action(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-    use std::thread;
-    use std::time::{Duration, Instant};
+mod tests;
 
-    use crate::backend::test_support::FakeBackend;
-
-    use super::*;
-
-    fn wait_for_event(
-        runtime: &mut CoreRuntime,
-        predicate: impl Fn(&BleEvent) -> bool,
-    ) -> BleEvent {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            while let Some(event) = runtime.try_recv() {
-                if predicate(&event) {
-                    return event;
-                }
-            }
-            assert!(Instant::now() < deadline, "timed out waiting for BLE event");
-            thread::sleep(Duration::from_millis(5));
-        }
-    }
-
-    #[test]
-    fn device_id_normalizes_case_and_whitespace() {
-        let id = DeviceId::parse("  AA:BB:CC:DD:EE:FF  ").expect("valid device id");
-        assert_eq!(id.as_str(), "aa:bb:cc:dd:ee:ff");
-    }
-
-    #[test]
-    fn device_id_rejects_empty_input() {
-        let error = DeviceId::parse("   ").expect_err("empty device id must fail");
-        assert_eq!(error.code(), "INVALID_ARGUMENT");
-    }
-
-    #[test]
-    fn gatt_key_normalizes_uuid_strings() {
-        let key = GattKey::parse(
-            "0000180D-0000-1000-8000-00805F9B34FB",
-            "00002A37-0000-1000-8000-00805F9B34FB",
-        )
-        .expect("valid GATT UUIDs");
-        assert_eq!(key.service_uuid(), "0000180d-0000-1000-8000-00805f9b34fb");
-    }
-
-    #[test]
-    fn scan_session_rejects_a_second_start_while_active() {
-        let mut session = ScanSession::default();
-        session
-            .start(OperationId::new(1), None)
-            .expect("first scan starts");
-        let error = session
-            .start(OperationId::new(2), None)
-            .expect_err("second scan must fail");
-        assert_eq!(error.code(), "BUSY");
-    }
-
-    #[test]
-    fn stale_scan_generation_cannot_finish_the_current_scan() {
-        let mut session = ScanSession::default();
-        let first = session
-            .start(OperationId::new(1), None)
-            .expect("first scan starts");
-        session.finish(first).expect("first scan finishes");
-        let second = session
-            .start(OperationId::new(2), None)
-            .expect("second scan starts");
-        assert!(!session.finish(first).expect("stale finish is ignored"));
-        assert_eq!(session.active_generation(), Some(second));
-    }
-
-    #[test]
-    fn failed_event_is_terminal_and_exposes_retryability() {
-        let event = BleEvent::failed(
-            Operation::Scan,
-            OperationId::new(9),
-            EventContext::default(),
-            BleError::Busy("scan already active".to_string()),
-        );
-        assert!(event.terminal);
-        assert!(!event.error.expect("error payload").retryable);
-    }
-
-    #[test]
-    fn failed_scan_start_emits_terminal_event_and_allows_retry() {
-        let backend = Arc::new(FakeBackend::default());
-        backend.fail_next_scan_start(BleError::ScanFailed("radio unavailable".to_string()));
-        let mut runtime = CoreRuntime::spawn_with_backend(backend);
-        let client = runtime.client();
-        let init_id = client.initialize();
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == init_id && event.phase == Phase::Succeeded
-        });
-        let failed_id = client.start_scan(None);
-        let failed = wait_for_event(&mut runtime, |event| {
-            event.operation_id == failed_id && event.terminal
-        });
-        assert_eq!(failed.phase, Phase::Failed);
-        let retry_id = client.start_scan(None);
-        let started = wait_for_event(&mut runtime, |event| {
-            event.operation_id == retry_id && event.phase == Phase::Started
-        });
-        assert_eq!(started.operation_id, retry_id);
-    }
-
-    #[test]
-    fn duplicate_scan_is_rejected_without_replacing_active_scan() {
-        let backend = Arc::new(FakeBackend::default());
-        let mut runtime = CoreRuntime::spawn_with_backend(backend);
-        let client = runtime.client();
-        let init_id = client.initialize();
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == init_id && event.phase == Phase::Succeeded
-        });
-        let active_id = client.start_scan(None);
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == active_id && event.phase == Phase::Started
-        });
-        let rejected_id = client.start_scan(None);
-        let rejected = wait_for_event(&mut runtime, |event| {
-            event.operation_id == rejected_id && event.terminal
-        });
-        assert_eq!(rejected.error.expect("busy error").code, "BUSY");
-    }
-
-    #[test]
-    fn timed_scan_emits_exactly_one_terminal_event() {
-        let backend = Arc::new(FakeBackend::default());
-        let mut runtime = CoreRuntime::spawn_with_backend(backend);
-        let client = runtime.client();
-        let init_id = client.initialize();
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == init_id && event.phase == Phase::Succeeded
-        });
-        let scan_id = client.start_scan(Some(Duration::from_millis(10)));
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == scan_id && event.phase == Phase::Started
-        });
-        let terminal = wait_for_event(&mut runtime, |event| {
-            event.operation_id == scan_id && event.terminal
-        });
-        assert_eq!(terminal.phase, Phase::Succeeded);
-
-        thread::sleep(Duration::from_millis(25));
-        let mut duplicate_terminal = false;
-        while let Some(event) = runtime.try_recv() {
-            duplicate_terminal |= event.operation_id == scan_id && event.terminal;
-        }
-        assert!(!duplicate_terminal);
-    }
-
-    #[test]
-    fn remote_disconnect_uses_unsolicited_operation_id() {
-        let backend = Arc::new(FakeBackend::default());
-        backend.add_device(DeviceInfo::new(
-            "AA:BB:CC:DD:EE:FF".to_string(),
-            Some("Sensor".to_string()),
-            Some(-42),
-            Vec::new(),
-            Default::default(),
-            Default::default(),
-            None,
-        ));
-        let mut runtime = CoreRuntime::spawn_with_backend(backend.clone());
-        let client = runtime.client();
-        let init_id = client.initialize();
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == init_id && event.phase == Phase::Succeeded
-        });
-        backend.emit_device_discovered("AA:BB:CC:DD:EE:FF");
-        wait_for_event(&mut runtime, |event| {
-            event.operation == Operation::Scan && event.phase == Phase::Progress
-        });
-        let connect_id = client.connect("aa:bb:cc:dd:ee:ff");
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == connect_id && event.phase == Phase::Succeeded
-        });
-        backend.emit_remote_disconnect("AA:BB:CC:DD:EE:FF");
-        let disconnected = wait_for_event(&mut runtime, |event| {
-            event.operation == Operation::Disconnect && event.phase == Phase::Received
-        });
-        assert_eq!(disconnected.operation_id, OperationId::UNSOLICITED);
-    }
-
-    #[test]
-    fn remote_disconnect_cancels_a_stale_connect_before_reconnect() {
-        let backend = Arc::new(FakeBackend::default());
-        backend.add_device(DeviceInfo::new(
-            "AA:BB:CC:DD:EE:FF".to_string(),
-            None,
-            None,
-            Vec::new(),
-            Default::default(),
-            Default::default(),
-            None,
-        ));
-        let mut runtime = CoreRuntime::spawn_with_backend(backend.clone());
-        let client = runtime.client();
-        let init_id = client.initialize();
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == init_id && event.phase == Phase::Succeeded
-        });
-
-        backend.block_next_connect();
-        let stale_id = client.connect("AA:BB:CC:DD:EE:FF");
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == stale_id && event.phase == Phase::Started
-        });
-        backend.emit_remote_disconnect("AA:BB:CC:DD:EE:FF");
-        let cancelled = wait_for_event(&mut runtime, |event| {
-            event.operation_id == stale_id && event.terminal
-        });
-        assert_eq!(cancelled.phase, Phase::Cancelled);
-
-        let reconnect_id = client.connect("AA:BB:CC:DD:EE:FF");
-        let reconnected = wait_for_event(&mut runtime, |event| {
-            event.operation_id == reconnect_id && event.terminal
-        });
-        assert_eq!(reconnected.phase, Phase::Succeeded);
-    }
-
-    #[test]
-    fn failed_connect_returns_to_disconnected_and_can_retry() {
-        let backend = Arc::new(FakeBackend::default());
-        backend.add_device(DeviceInfo::new(
-            "AA:BB:CC:DD:EE:FF".to_string(),
-            None,
-            None,
-            Vec::new(),
-            Default::default(),
-            Default::default(),
-            None,
-        ));
-        backend.fail_next_connect(BleError::ConnectionFailed("rejected".to_string()));
-        let mut runtime = CoreRuntime::spawn_with_backend(backend);
-        let client = runtime.client();
-        let init_id = client.initialize();
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == init_id && event.phase == Phase::Succeeded
-        });
-
-        let failed_id = client.connect("AA:BB:CC:DD:EE:FF");
-        let failed = wait_for_event(&mut runtime, |event| {
-            event.operation_id == failed_id && event.terminal
-        });
-        assert_eq!(failed.phase, Phase::Failed);
-
-        let retry_id = client.connect("AA:BB:CC:DD:EE:FF");
-        let retried = wait_for_event(&mut runtime, |event| {
-            event.operation_id == retry_id && event.terminal
-        });
-        assert_eq!(retried.phase, Phase::Succeeded);
-    }
-
-    #[test]
-    fn duplicate_characteristic_uuid_across_services_is_rejected() {
-        let backend = Arc::new(FakeBackend::default());
-        backend.add_device(DeviceInfo::new(
-            "AA:BB:CC:DD:EE:FF".to_string(),
-            None,
-            None,
-            Vec::new(),
-            Default::default(),
-            Default::default(),
-            None,
-        ));
-        let mut runtime = CoreRuntime::spawn_with_backend(backend);
-        let client = runtime.client();
-        let init_id = client.initialize();
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == init_id && event.phase == Phase::Succeeded
-        });
-        let connect_id = client.connect("AA:BB:CC:DD:EE:FF");
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == connect_id && event.phase == Phase::Succeeded
-        });
-        let first_id = client.subscribe(
-            "AA:BB:CC:DD:EE:FF",
-            "0000180d-0000-1000-8000-00805f9b34fb",
-            "00002a37-0000-1000-8000-00805f9b34fb",
-        );
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == first_id && event.phase == Phase::Succeeded
-        });
-        let second_id = client.subscribe(
-            "AA:BB:CC:DD:EE:FF",
-            "0000180f-0000-1000-8000-00805f9b34fb",
-            "00002a37-0000-1000-8000-00805f9b34fb",
-        );
-        let rejected = wait_for_event(&mut runtime, |event| {
-            event.operation_id == second_id && event.terminal
-        });
-        assert_eq!(
-            rejected.error.expect("ambiguity error").code,
-            "AMBIGUOUS_CHARACTERISTIC"
-        );
-    }
-
-    #[test]
-    fn device_commands_are_executed_in_submission_order() {
-        let backend = Arc::new(FakeBackend::default());
-        backend.add_device(DeviceInfo::new(
-            "AA:BB:CC:DD:EE:FF".to_string(),
-            None,
-            None,
-            Vec::new(),
-            Default::default(),
-            Default::default(),
-            None,
-        ));
-        let mut runtime = CoreRuntime::spawn_with_backend(backend);
-        let client = runtime.client();
-        let init_id = client.initialize();
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == init_id && event.phase == Phase::Succeeded
-        });
-
-        let connect_id = client.connect("AA:BB:CC:DD:EE:FF");
-        let discover_id = client.discover_services("AA:BB:CC:DD:EE:FF");
-        let discovered = wait_for_event(&mut runtime, |event| {
-            event.operation_id == discover_id && event.terminal
-        });
-
-        assert_eq!(discovered.phase, Phase::Succeeded);
-        assert!(connect_id.get() < discover_id.get());
-    }
-
-    #[test]
-    fn write_response_mode_is_preserved_through_the_command_seam() {
-        let backend = Arc::new(FakeBackend::default());
-        backend.add_device(DeviceInfo::new(
-            "AA:BB:CC:DD:EE:FF".to_string(),
-            None,
-            None,
-            Vec::new(),
-            Default::default(),
-            Default::default(),
-            None,
-        ));
-        let mut runtime = CoreRuntime::spawn_with_backend(backend.clone());
-        let client = runtime.client();
-        let init_id = client.initialize();
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == init_id && event.phase == Phase::Succeeded
-        });
-        let connect_id = client.connect("AA:BB:CC:DD:EE:FF");
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == connect_id && event.phase == Phase::Succeeded
-        });
-
-        let service = "0000180d-0000-1000-8000-00805f9b34fb";
-        let characteristic = "00002a37-0000-1000-8000-00805f9b34fb";
-        let with_response =
-            client.write("AA:BB:CC:DD:EE:FF", service, characteristic, vec![1], true);
-        let without_response =
-            client.write("AA:BB:CC:DD:EE:FF", service, characteristic, vec![2], false);
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == with_response && event.phase == Phase::Succeeded
-        });
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == without_response && event.phase == Phase::Succeeded
-        });
-        assert_eq!(backend.write_modes(), vec![true, false]);
-    }
-
-    #[test]
-    fn notification_routing_uses_one_pump_and_retains_failed_unsubscribe() {
-        let backend = Arc::new(FakeBackend::default());
-        backend.add_connected_device("AA:BB:CC:DD:EE:FF");
-        let mut runtime = CoreRuntime::spawn_with_backend(backend.clone());
-        let client = runtime.client();
-        let init_id = client.initialize();
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == init_id && event.phase == Phase::Succeeded
-        });
-        let connect_id = client.connect("AA:BB:CC:DD:EE:FF");
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == connect_id && event.phase == Phase::Succeeded
-        });
-
-        let service_a = "0000180d-0000-1000-8000-00805f9b34fb";
-        let service_b = "0000180f-0000-1000-8000-00805f9b34fb";
-        let characteristic = "00002a37-0000-1000-8000-00805f9b34fb";
-        let subscribe_id = client.subscribe("AA:BB:CC:DD:EE:FF", service_a, characteristic);
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == subscribe_id && event.phase == Phase::Succeeded
-        });
-        let duplicate_id = client.subscribe("AA:BB:CC:DD:EE:FF", service_a, characteristic);
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == duplicate_id && event.phase == Phase::Succeeded
-        });
-        assert_eq!(backend.notification_pumps_started(), 1);
-
-        backend.emit_notification(characteristic, vec![1, 2, 3]);
-        let notification = wait_for_event(&mut runtime, |event| {
-            event.operation == Operation::Notification && event.phase == Phase::Received
-        });
-        assert_eq!(notification.context.service_uuid, service_a);
-        assert_eq!(notification.context.characteristic_uuid, characteristic);
-        assert_eq!(notification.operation_id, OperationId::UNSOLICITED);
-
-        backend.emit_notification_error(BleError::SubscribeFailed(
-            "notification stream ended".to_string(),
-        ));
-        wait_for_event(&mut runtime, |event| {
-            event.operation == Operation::Notification && event.phase == Phase::Failed
-        });
-        let restart_id = client.subscribe("AA:BB:CC:DD:EE:FF", service_a, characteristic);
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == restart_id && event.phase == Phase::Succeeded
-        });
-        let restart_deadline = Instant::now() + Duration::from_secs(1);
-        while backend.notification_pumps_started() != 2 {
-            assert!(Instant::now() < restart_deadline);
-            thread::sleep(Duration::from_millis(5));
-        }
-
-        backend.fail_next_unsubscribe(BleError::UnsubscribeFailed("radio busy".to_string()));
-        let unsubscribe_id = client.unsubscribe("AA:BB:CC:DD:EE:FF", service_a, characteristic);
-        let unsubscribe = wait_for_event(&mut runtime, |event| {
-            event.operation_id == unsubscribe_id && event.terminal
-        });
-        assert_eq!(unsubscribe.phase, Phase::Failed);
-
-        let ambiguous_id = client.subscribe("AA:BB:CC:DD:EE:FF", service_b, characteristic);
-        let ambiguous = wait_for_event(&mut runtime, |event| {
-            event.operation_id == ambiguous_id && event.terminal
-        });
-        assert_eq!(
-            ambiguous.error.expect("ambiguity error").code,
-            "AMBIGUOUS_CHARACTERISTIC"
-        );
-        assert_eq!(backend.notification_pumps_started(), 2);
-
-        backend.emit_remote_disconnect("AA:BB:CC:DD:EE:FF");
-        wait_for_event(&mut runtime, |event| {
-            event.operation == Operation::Disconnect && event.phase == Phase::Received
-        });
-        let reconnect_id = client.connect("AA:BB:CC:DD:EE:FF");
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == reconnect_id && event.phase == Phase::Succeeded
-        });
-        let after_disconnect_id = client.subscribe("AA:BB:CC:DD:EE:FF", service_b, characteristic);
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == after_disconnect_id && event.phase == Phase::Succeeded
-        });
-    }
-
-    #[test]
-    fn shutdown_completes_when_the_event_queue_is_full() {
-        let backend = Arc::new(FakeBackend::default());
-        let mut runtime = CoreRuntime::spawn_with_backend(backend);
-        let client = runtime.client();
-        for _ in 0..(EVENT_CHANNEL_CAPACITY * 2) {
-            client.connect("   ");
-        }
-
-        let started = Instant::now();
-        runtime.shutdown();
-        assert!(started.elapsed() < Duration::from_secs(1));
-    }
-
-    #[test]
-    fn saturated_command_submission_returns_queue_full() {
-        let backend = Arc::new(FakeBackend::default());
-        backend.add_device(DeviceInfo::new(
-            "AA:BB:CC:DD:EE:FF".to_string(),
-            None,
-            None,
-            Vec::new(),
-            Default::default(),
-            Default::default(),
-            None,
-        ));
-        let mut runtime = CoreRuntime::spawn_with_backend(backend.clone());
-        let client = runtime.client();
-        let init_id = client.initialize();
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == init_id && event.phase == Phase::Succeeded
-        });
-
-        backend.block_next_connect();
-        let connect_id = client.connect("AA:BB:CC:DD:EE:FF");
-        wait_for_event(&mut runtime, |event| {
-            event.operation_id == connect_id && event.phase == Phase::Started
-        });
-        for _ in 0..(COMMAND_CHANNEL_CAPACITY * 2) {
-            client.discover_services("AA:BB:CC:DD:EE:FF");
-        }
-        let queue_full = wait_for_event(&mut runtime, |event| {
-            event
-                .error
-                .as_ref()
-                .is_some_and(|error| error.code == "QUEUE_FULL")
-        });
-        assert!(queue_full.terminal);
-        backend.release_connect();
-    }
-}
+#[cfg(test)]
+mod regression_tests;

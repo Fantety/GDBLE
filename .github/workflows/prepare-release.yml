@@ -6,14 +6,23 @@ on:
       version:
         description: Version without the v prefix
         required: true
-        default: 0.6.0
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate version and release notes
+        env:
+          VERSION: ${{ inputs.version }}
+        run: python3 scripts/release-notes.py "v$VERSION"
+
   desktop:
+    needs: validate-release
     strategy:
       matrix:
         include:
@@ -53,6 +62,7 @@ jobs:
           path: artifact/*
 
   android:
+    needs: validate-release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,11 +79,7 @@ jobs:
       - run: cargo install cargo-ndk --locked
       - run: bash scripts/build-android.sh
       - name: Validate Android package
-        run: |
-          unzip -l addons/gdble/android/gdble-release.aar | rg 'jni/arm64-v8a/libgdble.so'
-          unzip -l addons/gdble/android/gdble-release.aar | rg 'jni/x86_64/libgdble.so'
-          unzip -p addons/gdble/android/btleplug-release.aar classes.jar > /tmp/btleplug.jar
-          jar tf /tmp/btleplug.jar | rg 'com/nonpolynomial/btleplug/android/impl'
+        run: python3 scripts/validate-android-aar.py
       - uses: actions/upload-artifact@v4
         with:
           name: android-aars

@@ -89,11 +89,17 @@ Both public classes expose `ble_event(event: Dictionary)`:
 | `data` | Variant | Adapter, DeviceInfo, services, bytes, or reason text |
 | `error` | Dictionary | Always contains `code/message/retryable/details` |
 
-Methods that previously returned `void` now return an ignorable operation ID, and each positive ID receives exactly one terminal event. `stop_scan()` returns the current scan ID or `0` when idle.
+Methods that previously returned `void` now return an ignorable operation ID. Each positive ID receives exactly one terminal event while the Manager is alive and processing events; destroying it cancels background work without promising delivery of remaining events. `stop_scan()` returns the current scan ID or `0` when idle, and cancellation does not depend on command queue capacity.
+
+Connect signals before calling methods. Invalid arguments, uninitialized standalone devices, and command queue rejections emit failure synchronously, before the method returns. A handler must not depend solely on an ID assigned after the call. Local rejections from a `BleDevice` are emitted by that device and are not forwarded to the Manager. Accepted requests complete asynchronously through the bounded event queue; the Manager forwards device events to the corresponding device. Caches update before structured and legacy signals, so synchronous getters inside callbacks see the corresponding state. Request rejection does not change an existing connection.
 
 For scan progress events, the DeviceInfo `data` also contains `kind: StringName` with `discovered` or `updated`.
 
 New stable errors include `INVALID_ARGUMENT`, `NOT_INITIALIZED`, `BUSY`, `QUEUE_FULL`, `CANCELLED`, `ANDROID_NOT_INITIALIZED`, and `AMBIGUOUS_CHARACTERISTIC`. Legacy error signals keep their compatibility text.
+
+Backend initialization, scan start/stop, and device operations each have a 30-second deadline and fail with `TIMEOUT`; backend Rust panics become `INTERNAL_ERROR`. Deadlines start when backend execution starts, excluding queue and event delivery time. They do not limit normal scan or notification stream lifetime. Shutdown cancels tracked work, then attempts scan stop and device disconnects within a shared two-second cleanup budget, followed by a 100 ms runtime shutdown grace period. A blocking system call cannot be preempted by an async deadline, and cancelling a future does not necessarily undo effects already applied by the OS.
+
+Unexpected adapter stream termination invalidates initialization, cancels scan/device work, and emits a nonterminal `initialize` failure with operation ID `0`. Call `initialize()` again after the bounded cleanup. Unexpected notification stream termination emits a nonterminal `notification` failure; subscribing again restarts that device's stream. Generation checks ignore events from old sessions. There is no automatic reconnect.
 
 ## Public compatibility API
 
@@ -138,4 +144,4 @@ cargo test --all-targets --all-features --locked
 
 See [CONTEXT.md](CONTEXT.md), [architecture decisions](docs/adr), [Issues](https://github.com/Fantety/GDBLE/issues), and [Pull Requests](https://github.com/Fantety/GDBLE/pulls).
 
-Maintainers should follow the [two-phase release process](docs/RELEASING.md).
+Maintainers should follow the [two-phase release process](docs/RELEASING.md). Keep versioned release notes in [release-notes](release-notes); GitHub Actions reads the Markdown file matching the tag, without per-release workflow edits.

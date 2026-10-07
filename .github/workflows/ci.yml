@@ -22,11 +22,9 @@ jobs:
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo test --all-targets --all-features --locked
       - name: Static lifecycle checks
-        shell: bash
-        run: |
-          ! rg 'block_on|unbounded_channel|mpsc::unbounded|tokio::spawn' src
-          ! rg 'Arc<Mutex<[^>]*Gd<' src
-          test "$(rg -n 'EVENTS_PER_FRAME: usize = 256' src/bluetooth_manager.rs | wc -l)" -eq 1
+        run: python3 scripts/check-lifecycle.py
+      - name: Release notes validation tests
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
   platform-build:
     strategy:
@@ -51,6 +49,9 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libudev-dev
       - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Build script failure regression tests
+        if: runner.os == 'Windows'
+        run: .\scripts\test-build-failures.ps1
 
   godot-load:
     runs-on: ubuntu-latest
@@ -71,7 +72,9 @@ jobs:
         with:
           version: ${{ matrix.godot }}
           use-dotnet: false
-      - run: godot --headless --path demo --script smoke_test.gd
+      - name: Run Godot smoke test
+        timeout-minutes: 2
+        run: godot --headless --path demo --script smoke_test.gd
 
   android-aar:
     runs-on: ubuntu-latest
@@ -90,14 +93,4 @@ jobs:
       - run: cargo install cargo-ndk --locked
       - run: bash scripts/build-android.sh
       - name: Validate AAR contents
-        run: |
-          unzip -l addons/gdble/android/gdble-release.aar | tee gdble-aar.txt
-          rg 'jni/arm64-v8a/libgdble.so' gdble-aar.txt
-          rg 'jni/x86_64/libgdble.so' gdble-aar.txt
-          rg 'assets/addons/gdble/gdble.gdextension' gdble-aar.txt
-          aapt2="$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -1)"
-          "$aapt2" dump xmltree --file AndroidManifest.xml addons/gdble/android/gdble-release.aar | rg 'org.godotengine.plugin.v2.GDBLE'
-          unzip -p addons/gdble/android/gdble-release.aar classes.jar > /tmp/gdble-plugin.jar
-          jar tf /tmp/gdble-plugin.jar | rg 'org/gdble/android/GDBLEPlugin.class'
-          unzip -p addons/gdble/android/btleplug-release.aar classes.jar > /tmp/btleplug.jar
-          jar tf /tmp/btleplug.jar | rg 'com/nonpolynomial/btleplug/android/impl'
+        run: python3 scripts/validate-android-aar.py

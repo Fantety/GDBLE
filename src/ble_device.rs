@@ -1,18 +1,11 @@
 use godot::prelude::*;
 
-use crate::ble_service::BleServiceInfo;
 use crate::core::{
-    BleError, BleEvent, CoreClient, EventContext, EventData, Operation, OperationId, Phase,
+    BleError, BleEvent, ConnectionState as DeviceState, CoreClient, EventContext, EventData,
+    Operation, OperationId, Phase, Submission,
 };
+use crate::event_cache::DeviceCache;
 use crate::godot_event;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DeviceState {
-    Disconnected,
-    Connecting,
-    Connected,
-    Disconnecting,
-}
 
 /// Main-thread Godot adapter for one normalized BLE device identity.
 #[derive(GodotClass)]
@@ -23,8 +16,7 @@ pub struct BleDevice {
     address: String,
     display_address: GString,
     name: GString,
-    state: DeviceState,
-    services: Vec<BleServiceInfo>,
+    cache: DeviceCache,
     next_local_operation_id: i64,
 }
 
@@ -60,7 +52,7 @@ impl BleDevice {
     #[func]
     fn connect_async(&mut self) -> i64 {
         if let Some(client) = self.client.clone() {
-            client.connect(&self.address).get()
+            self.finish_submission(client.connect(&self.address))
         } else {
             self.reject_local(Operation::Connect, EventContext::default())
         }
@@ -69,7 +61,7 @@ impl BleDevice {
     #[func]
     fn disconnect(&mut self) -> i64 {
         if let Some(client) = self.client.clone() {
-            client.disconnect(&self.address).get()
+            self.finish_submission(client.disconnect(&self.address))
         } else {
             self.reject_local(Operation::Disconnect, EventContext::default())
         }
@@ -77,7 +69,7 @@ impl BleDevice {
 
     #[func]
     pub fn is_connected(&self) -> bool {
-        self.state == DeviceState::Connected
+        self.cache.state == DeviceState::Connected
     }
 
     #[func]
@@ -93,7 +85,7 @@ impl BleDevice {
     #[func]
     fn discover_services(&mut self) -> i64 {
         if let Some(client) = self.client.clone() {
-            client.discover_services(&self.address).get()
+            self.finish_submission(client.discover_services(&self.address))
         } else {
             self.reject_local(Operation::DiscoverServices, EventContext::default())
         }
@@ -101,22 +93,21 @@ impl BleDevice {
 
     #[func]
     fn get_services(&self) -> Array<VarDictionary> {
-        self.services
+        self.cache
+            .services
             .iter()
-            .map(BleServiceInfo::to_dictionary)
+            .map(crate::ble_service::BleServiceInfo::to_dictionary)
             .collect()
     }
 
     #[func]
     fn read_characteristic(&mut self, service_uuid: GString, char_uuid: GString) -> i64 {
         if let Some(client) = self.client.clone() {
-            client
-                .read(
-                    &self.address,
-                    &service_uuid.to_string(),
-                    &char_uuid.to_string(),
-                )
-                .get()
+            self.finish_submission(client.read(
+                &self.address,
+                &service_uuid.to_string(),
+                &char_uuid.to_string(),
+            ))
         } else {
             self.reject_local(Operation::Read, gatt_context(&service_uuid, &char_uuid))
         }
@@ -131,15 +122,13 @@ impl BleDevice {
         with_response: bool,
     ) -> i64 {
         if let Some(client) = self.client.clone() {
-            client
-                .write(
-                    &self.address,
-                    &service_uuid.to_string(),
-                    &char_uuid.to_string(),
-                    data.to_vec(),
-                    with_response,
-                )
-                .get()
+            self.finish_submission(client.write(
+                &self.address,
+                &service_uuid.to_string(),
+                &char_uuid.to_string(),
+                data.to_vec(),
+                with_response,
+            ))
         } else {
             self.reject_local(Operation::Write, gatt_context(&service_uuid, &char_uuid))
         }
@@ -148,13 +137,11 @@ impl BleDevice {
     #[func]
     fn subscribe_characteristic(&mut self, service_uuid: GString, char_uuid: GString) -> i64 {
         if let Some(client) = self.client.clone() {
-            client
-                .subscribe(
-                    &self.address,
-                    &service_uuid.to_string(),
-                    &char_uuid.to_string(),
-                )
-                .get()
+            self.finish_submission(client.subscribe(
+                &self.address,
+                &service_uuid.to_string(),
+                &char_uuid.to_string(),
+            ))
         } else {
             self.reject_local(
                 Operation::Subscribe,
@@ -166,13 +153,11 @@ impl BleDevice {
     #[func]
     fn unsubscribe_characteristic(&mut self, service_uuid: GString, char_uuid: GString) -> i64 {
         if let Some(client) = self.client.clone() {
-            client
-                .unsubscribe(
-                    &self.address,
-                    &service_uuid.to_string(),
-                    &char_uuid.to_string(),
-                )
-                .get()
+            self.finish_submission(client.unsubscribe(
+                &self.address,
+                &service_uuid.to_string(),
+                &char_uuid.to_string(),
+            ))
         } else {
             self.reject_local(
                 Operation::Unsubscribe,
@@ -191,14 +176,29 @@ impl IRefCounted for BleDevice {
             address: String::new(),
             display_address: GString::new(),
             name: GString::new(),
-            state: DeviceState::Disconnected,
-            services: Vec::new(),
+            cache: DeviceCache::default(),
             next_local_operation_id: 1,
         }
     }
 }
 
 impl BleDevice {
+    pub(crate) fn detach(&mut self) {
+        self.cache.state = DeviceState::Disconnected;
+        self.cache.services.clear();
+    }
+
+    fn finish_submission(&mut self, submission: Submission) -> i64 {
+        match submission {
+            Ok(id) => id.get(),
+            Err(event) => {
+                let id = event.operation_id.get();
+                self.apply_core_event(&event);
+                id
+            }
+        }
+    }
+
     pub(crate) fn new(
         address: String,
         display_address: String,
@@ -211,8 +211,7 @@ impl BleDevice {
             address,
             display_address: GString::from(display_address.as_str()),
             name: GString::from(name.as_str()),
-            state: DeviceState::Disconnected,
-            services: Vec::new(),
+            cache: DeviceCache::default(),
             next_local_operation_id: 1,
         })
     }
@@ -229,37 +228,34 @@ impl BleDevice {
             }
         }
 
+        self.cache.apply(event);
+
         self.base_mut().emit_signal(
             "ble_event",
             &[godot_event::to_dictionary(event).to_variant()],
         );
 
         match (event.operation, event.phase) {
-            (Operation::Connect, Phase::Started) => self.state = DeviceState::Connecting,
             (Operation::Connect, Phase::Succeeded) => {
-                self.state = DeviceState::Connected;
                 self.base_mut().emit_signal("connected", &[]);
             }
             (Operation::Connect, Phase::Failed | Phase::Cancelled) => {
-                self.state = DeviceState::Disconnected;
                 let error = legacy_error(event);
                 self.base_mut()
                     .emit_signal("connection_failed", &[error.to_variant()]);
             }
-            (Operation::Disconnect, Phase::Started) => self.state = DeviceState::Disconnecting,
             (Operation::Disconnect, Phase::Succeeded | Phase::Received) => {
-                self.state = DeviceState::Disconnected;
                 self.base_mut().emit_signal("disconnected", &[]);
             }
             (Operation::Disconnect, Phase::Failed | Phase::Cancelled) => {
-                self.state = DeviceState::Connected;
                 self.emit_operation_failed(event);
             }
             (Operation::DiscoverServices, Phase::Succeeded) => {
                 if let EventData::Services(services) = &event.data {
-                    self.services = services.clone();
-                    let dictionaries: Array<VarDictionary> =
-                        services.iter().map(BleServiceInfo::to_dictionary).collect();
+                    let dictionaries: Array<VarDictionary> = services
+                        .iter()
+                        .map(crate::ble_service::BleServiceInfo::to_dictionary)
+                        .collect();
                     self.base_mut()
                         .emit_signal("services_discovered", &[dictionaries.to_variant()]);
                 }

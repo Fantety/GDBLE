@@ -7,6 +7,7 @@ mod ble_device;
 mod ble_service;
 mod bluetooth_manager;
 mod core;
+mod event_cache;
 mod godot_event;
 mod types;
 

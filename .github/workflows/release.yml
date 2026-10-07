@@ -16,6 +16,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)" = "$version"
+          python3 scripts/release-notes.py "$GITHUB_REF_NAME"
           test -f addons/gdble/libgdble.windows.x86_64.dll
           test -f addons/gdble/libgdble.linux.x86_64.so
           test -f addons/gdble/libgdble.macos.x86_64.dylib
@@ -33,5 +34,6 @@ jobs:
           (cd package && zip -r ../gdble-${GITHUB_REF_NAME}.zip .)
       - uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: release-notes/${{ github.ref_name }}.md
+          generate_release_notes: false
           files: gdble-${{ github.ref_name }}.zip

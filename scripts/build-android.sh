@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
 metadata="$(cargo metadata --format-version 1 --locked)"
 btleplug_manifest="$(printf '%s' "$metadata" | python3 -c '
 import json, sys
@@ -15,7 +16,6 @@ btleplug_root="$(dirname "$btleplug_manifest")"
 bridge_project="$btleplug_root/src/droidplug/java"
 generated_jni="$repo_root/android-plugin/plugin/build/generated/jniLibs"
 
-cd "$repo_root"
 cargo ndk -t arm64-v8a -t x86_64 -o "$generated_jni" build --release --locked
 "$bridge_project/gradlew" -p "$bridge_project" assembleRelease
 "$bridge_project/gradlew" -p "$repo_root/android-plugin" :plugin:assembleRelease

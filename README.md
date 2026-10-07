@@ -93,11 +93,17 @@ func _on_ble_event(event: Dictionary) -> void:
 | `data` | Variant | Adapter、DeviceInfo、服务数组、字节或原因文本 |
 | `error` | Dictionary | 固定包含 `code/message/retryable/details` |
 
-原先返回 `void` 的异步方法现在返回可忽略的 operation ID。每个正 ID 恰好有一个终止事件。`stop_scan()` 返回当前扫描 ID；没有活动扫描时返回 `0`。
+原先返回 `void` 的异步方法现在返回可忽略的 operation ID。在 Manager 存活并持续处理事件期间，每个正 ID 恰好有一个终止事件；销毁 Manager 会取消后台工作，不再保证投递剩余事件。`stop_scan()` 返回当前扫描 ID；没有活动扫描时返回 `0`，命令队列满也不会丢失停止请求。
+
+请先连接信号，再调用方法。参数错误、独立设备未初始化和命令队列拒绝会在方法返回前同步发出失败事件；不要仅依靠调用返回后才赋值的 ID 来接收这些事件。`BleDevice` 发起的本地拒绝由该设备发出，不会转发到 Manager。已接纳请求通过有界事件队列异步投递，设备事件由 Manager 转发至对应设备。缓存先更新，再发出结构化和旧版信号，回调中的同步 getter 可读取对应状态；请求被拒绝不会改变已有连接状态。
 
 扫描 progress 事件的 DeviceInfo `data` 额外包含 `kind: StringName`，值为 `discovered` 或 `updated`。
 
 常用新增错误码：`INVALID_ARGUMENT`、`NOT_INITIALIZED`、`BUSY`、`QUEUE_FULL`、`CANCELLED`、`ANDROID_NOT_INITIALIZED`、`AMBIGUOUS_CHARACTERISTIC`。旧错误信号继续输出兼容文本。
+
+后端初始化、扫描启停和设备操作各有 30 秒超时，超时返回 `TIMEOUT`；后端 Rust panic 转为 `INTERNAL_ERROR`。该时限从后端执行开始计算，不包含排队和事件投递时间，也不限制持续扫描或通知流的正常寿命。关闭时先取消任务，再在总计 2 秒的预算内尝试停止扫描、断开连接；运行时另有 100 毫秒退出宽限。底层系统调用若阻塞线程，或操作已在系统中生效，取消 future 并不保证撤销其物理效果。
+
+适配器事件流异常结束会清空初始化状态、取消扫描与设备工作，并发出 `operation_id = 0`、`operation = initialize` 的非终止失败事件；完成有时限的清理后可再次调用 `initialize()`。通知流异常结束会发出同类 `notification` 失败事件，重新订阅可重建通知流。旧会话迟到的事件会被忽略，不会自动重连。
 
 ## API 兼容层
 
@@ -157,4 +163,4 @@ cargo test --all-targets --all-features --locked
 
 架构词汇见 [CONTEXT.md](CONTEXT.md)，关键决策见 [docs/adr](docs/adr)。问题与贡献请使用 [Issues](https://github.com/Fantety/GDBLE/issues) 和 [Pull Requests](https://github.com/Fantety/GDBLE/pulls)。
 
-发布维护者请遵循 [两阶段发布流程](docs/RELEASING.md)。
+发布维护者请遵循 [两阶段发布流程](docs/RELEASING.md)。每个版本的发布说明保存在 [release-notes](release-notes)，GitHub Actions 根据 tag 读取对应 Markdown 文件，无需逐次修改 workflow。

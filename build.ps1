@@ -6,6 +6,9 @@ $addon = Join-Path $repoRoot "addons\gdble"
 Push-Location $repoRoot
 try {
     cargo build --release --locked
+    if ($LASTEXITCODE -ne 0) {
+        throw "Desktop Cargo build failed with exit code $LASTEXITCODE"
+    }
     Copy-Item (
         Join-Path $repoRoot "target\release\gdble.dll"
     ) (Join-Path $addon "libgdble.windows.x86_64.dll") -Force

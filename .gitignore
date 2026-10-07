@@ -1,4 +1,5 @@
 .kiro/
 .cargo/
 /target
+__pycache__/
 ._*

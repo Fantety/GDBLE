@@ -7,8 +7,9 @@ use godot::prelude::*;
 use crate::ble_device::BleDevice;
 use crate::core::{
     AdapterInfo, BleError, BleEvent, CoreClient, CoreRuntime, DeviceId, DeviceProgressKind,
-    EventContext, EventData, Operation, OperationId, Phase,
+    EventContext, EventData, Operation, Phase, Submission,
 };
+use crate::event_cache::{ScanCache, ScanSignals};
 use crate::godot_event;
 use crate::types::{is_debug_mode, set_debug_mode, DeviceInfo};
 
@@ -23,8 +24,7 @@ pub struct BluetoothManager {
     client: CoreClient,
     initialized: bool,
     adapter_info: Option<AdapterInfo>,
-    active_scan_id: OperationId,
-    scan_started: bool,
+    scan: ScanCache,
     discovered_devices: HashMap<String, DeviceInfo>,
     devices: HashMap<String, Gd<BleDevice>>,
 }
@@ -40,8 +40,7 @@ impl INode for BluetoothManager {
             client,
             initialized: false,
             adapter_info: None,
-            active_scan_id: OperationId::UNSOLICITED,
-            scan_started: false,
+            scan: ScanCache::default(),
             discovered_devices: HashMap::new(),
             devices: HashMap::new(),
         }
@@ -64,6 +63,9 @@ impl INode for BluetoothManager {
         if what == NodeNotification::PREDELETE {
             if let Some(mut core) = self.core.take() {
                 core.shutdown();
+            }
+            for device in self.devices.values_mut() {
+                device.bind_mut().detach();
             }
             self.devices.clear();
             self.initialized = false;
@@ -114,8 +116,8 @@ impl BluetoothManager {
     }
 
     #[func]
-    pub fn initialize(&self) -> i64 {
-        self.client.initialize().get()
+    pub fn initialize(&mut self) -> i64 {
+        self.finish_submission(self.client.initialize())
     }
 
     #[func]
@@ -135,23 +137,23 @@ impl BluetoothManager {
         let timeout = match Self::scan_timeout(timeout_seconds) {
             Ok(timeout) => timeout,
             Err(error) => {
-                return self
-                    .client
-                    .reject(Operation::Scan, EventContext::default(), error)
-                    .get();
+                return self.finish_submission(self.client.reject(
+                    Operation::Scan,
+                    EventContext::default(),
+                    error,
+                ));
             }
         };
-        let operation_id = self.client.start_scan(timeout);
-        if self.active_scan_id == OperationId::UNSOLICITED {
-            self.active_scan_id = operation_id;
-            self.scan_started = false;
+        let submission = self.client.start_scan(timeout);
+        if let Ok(id) = &submission {
+            self.scan.submitted(*id);
         }
-        operation_id.get()
+        self.finish_submission(submission)
     }
 
     #[func]
     pub fn stop_scan(&self) -> i64 {
-        self.client.stop_scan(self.active_scan_id).get()
+        self.client.stop_scan(self.scan.active_id).get()
     }
 
     #[func]
@@ -168,17 +170,20 @@ impl BluetoothManager {
         let device_id = match DeviceId::parse(&input) {
             Ok(device_id) => device_id,
             Err(error) => {
-                self.client
-                    .reject(Operation::ResolveDevice, EventContext::default(), error);
+                self.finish_submission(self.client.reject(
+                    Operation::ResolveDevice,
+                    EventContext::default(),
+                    error,
+                ));
                 return None;
             }
         };
         if !self.initialized {
-            self.client.reject(
+            self.finish_submission(self.client.reject(
                 Operation::ResolveDevice,
                 EventContext::for_device(&device_id),
                 BleError::NotInitialized,
-            );
+            ));
             return None;
         }
         let key = device_id.as_str().to_string();
@@ -201,29 +206,27 @@ impl BluetoothManager {
     }
 
     #[func]
-    pub fn disconnect_device(&self, address: GString) -> i64 {
+    pub fn disconnect_device(&mut self, address: GString) -> i64 {
         let input = address.to_string();
         let device_id = match DeviceId::parse(&input) {
             Ok(device_id) => device_id,
             Err(error) => {
-                return self
-                    .client
-                    .reject(Operation::Disconnect, EventContext::default(), error)
-                    .get();
+                return self.finish_submission(self.client.reject(
+                    Operation::Disconnect,
+                    EventContext::default(),
+                    error,
+                ));
             }
         };
         let context = EventContext::for_device(&device_id);
         if !self.devices.contains_key(device_id.as_str()) {
-            return self
-                .client
-                .reject(
-                    Operation::Disconnect,
-                    context,
-                    BleError::DeviceNotFound(input.trim().to_string()),
-                )
-                .get();
+            return self.finish_submission(self.client.reject(
+                Operation::Disconnect,
+                context,
+                BleError::DeviceNotFound(input.trim().to_string()),
+            ));
         }
-        self.client.disconnect(device_id.as_str()).get()
+        self.finish_submission(self.client.disconnect(device_id.as_str()))
     }
 
     #[func]
@@ -243,6 +246,17 @@ impl BluetoothManager {
 }
 
 impl BluetoothManager {
+    fn finish_submission(&mut self, submission: Submission) -> i64 {
+        match submission {
+            Ok(id) => id.get(),
+            Err(event) => {
+                let id = event.operation_id.get();
+                self.apply_core_event(*event);
+                id
+            }
+        }
+    }
+
     fn scan_timeout(timeout_seconds: f64) -> Result<Option<Duration>, BleError> {
         if !timeout_seconds.is_finite() {
             return Err(BleError::InvalidArgument(
@@ -257,12 +271,15 @@ impl BluetoothManager {
         if timeout_seconds == 0.0 {
             Ok(None)
         } else {
-            Ok(Some(Duration::from_secs_f64(timeout_seconds)))
+            Duration::try_from_secs_f64(timeout_seconds)
+                .map(Some)
+                .map_err(|_| BleError::InvalidArgument("scan timeout is out of range".to_string()))
         }
     }
 
     fn apply_core_event(&mut self, event: BleEvent) {
         self.update_caches(&event);
+        let scan_signals = self.scan.apply(&event);
 
         if !event.context.device_address.is_empty() {
             if let Some(mut device) = self.devices.get(&event.context.device_address).cloned() {
@@ -274,7 +291,7 @@ impl BluetoothManager {
             "ble_event",
             &[godot_event::to_dictionary(&event).to_variant()],
         );
-        self.emit_legacy_manager_signals(&event);
+        self.emit_legacy_manager_signals(&event, scan_signals);
     }
 
     fn update_caches(&mut self, event: &BleEvent) {
@@ -283,9 +300,10 @@ impl BluetoothManager {
                 self.initialized = true;
                 self.adapter_info = Some(info.clone());
             }
-            (Operation::Initialize, Phase::Failed | Phase::Cancelled, _) => {
+            (Operation::Initialize, _, _) if event.adapter_initialized == Some(false) => {
                 self.initialized = false;
                 self.adapter_info = None;
+                self.discovered_devices.clear();
             }
             (Operation::Scan, Phase::Progress, EventData::Device { info, .. }) => {
                 if let Ok(device_id) = DeviceId::parse(&info.address) {
@@ -297,7 +315,7 @@ impl BluetoothManager {
         }
     }
 
-    fn emit_legacy_manager_signals(&mut self, event: &BleEvent) {
+    fn emit_legacy_manager_signals(&mut self, event: &BleEvent, scan_signals: ScanSignals) {
         match (event.operation, event.phase) {
             (Operation::Initialize, Phase::Succeeded) => {
                 self.base_mut().emit_signal(
@@ -315,8 +333,7 @@ impl BluetoothManager {
                     .emit_signal("error_occurred", &[error.to_variant()]);
             }
             (Operation::Scan, Phase::Started) => {
-                if event.operation_id == self.active_scan_id && !self.scan_started {
-                    self.scan_started = true;
+                if scan_signals.started {
                     self.base_mut().emit_signal("scan_started", &[]);
                 }
             }
@@ -336,12 +353,8 @@ impl BluetoothManager {
                     self.base_mut()
                         .emit_signal("error_occurred", &[error.to_variant()]);
                 }
-                if event.operation_id == self.active_scan_id {
-                    self.active_scan_id = OperationId::UNSOLICITED;
-                    if self.scan_started {
-                        self.base_mut().emit_signal("scan_stopped", &[]);
-                    }
-                    self.scan_started = false;
+                if scan_signals.stopped {
+                    self.base_mut().emit_signal("scan_stopped", &[]);
                 }
             }
             (Operation::Connect, Phase::Started) => {
