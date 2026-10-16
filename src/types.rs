@@ -14,50 +14,6 @@ pub fn is_debug_mode() -> bool {
     DEBUG_MODE.load(Ordering::Relaxed)
 }
 
-/// 调试日志宏 - 仅在调试模式下输出
-/// 使用 eprintln! 确保线程安全，可以从任何线程调用
-#[macro_export]
-macro_rules! ble_debug {
-    ($($arg:tt)*) => {
-        if $crate::types::is_debug_mode() {
-            eprintln!("[BLE Debug] {}", format!($($arg)*));
-        }
-    };
-}
-
-/// 信息日志宏 - 仅在调试模式下输出
-/// 使用 eprintln! 确保线程安全，可以从任何线程调用
-#[macro_export]
-macro_rules! ble_info {
-    ($($arg:tt)*) => {
-        if $crate::types::is_debug_mode() {
-            eprintln!("[BLE Info] {}", format!($($arg)*));
-        }
-    };
-}
-
-/// 警告日志宏 - 仅在调试模式下输出
-/// 使用 eprintln! 确保线程安全，可以从任何线程调用
-#[macro_export]
-macro_rules! ble_warn {
-    ($($arg:tt)*) => {
-        if $crate::types::is_debug_mode() {
-            eprintln!("[BLE Warning] {}", format!($($arg)*));
-        }
-    };
-}
-
-/// 错误日志宏 - 仅在调试模式下输出
-/// 使用 eprintln! 确保线程安全，可以从任何线程调用
-#[macro_export]
-macro_rules! ble_error {
-    ($($arg:tt)*) => {
-        if $crate::types::is_debug_mode() {
-            eprintln!("[BLE Error] {}", format!($($arg)*));
-        }
-    };
-}
-
 /// 设备信息结构
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceInfo {
@@ -150,9 +106,14 @@ impl DeviceInfo {
 }
 
 /// Error values passed through the Rust core and exposed as stable event codes.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Eq, PartialEq, thiserror::Error)]
 pub enum BleError {
+    #[error("Bluetooth adapter is unavailable: {0}")]
+    AdapterUnavailable(String),
+    #[error("Event buffer overflow: {0}")]
+    EventOverflow(String),
+    #[error("GATT services changed; discover services again")]
+    ServicesChanged,
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
     #[error("Operation is busy: {0}")]
@@ -162,6 +123,7 @@ pub enum BleError {
     #[error("Operation cancelled: {0}")]
     Cancelled(String),
     #[error("Android Bluetooth bridge is not initialized: {0}")]
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     AndroidNotInitialized(String),
     #[error("Characteristic UUID is ambiguous across services: {0}")]
     AmbiguousCharacteristic(String),
@@ -179,8 +141,6 @@ pub enum BleError {
     NotConnected,
     #[error("Invalid UUID: {0}")]
     InvalidUuid(String),
-    #[error("Service not found: {0}")]
-    ServiceNotFound(String),
     #[error("Characteristic not found: {0}")]
     CharacteristicNotFound(String),
     #[error("Scan failed: {0}")]
@@ -197,8 +157,6 @@ pub enum BleError {
     UnsubscribeFailed(String),
     #[error("Service discovery failed: {0}")]
     ServiceDiscoveryFailed(String),
-    #[error("Permission denied: {0}")]
-    PermissionDenied(String),
     #[error("Operation timed out: {0}")]
     Timeout(String),
     #[error("Internal error: {0}")]
@@ -209,6 +167,9 @@ impl BleError {
     /// Preserves the 0.5.x Chinese signal text while structured events use Display.
     pub fn legacy_message(&self) -> String {
         match self {
+            BleError::AdapterUnavailable(state) => format!("蓝牙适配器不可用: {state}"),
+            BleError::EventOverflow(source) => format!("事件缓冲溢出: {source}"),
+            BleError::ServicesChanged => "GATT 服务已变化，请重新发现服务".to_string(),
             BleError::InvalidArgument(msg) => format!("参数无效: {}", msg),
             BleError::Busy(msg) => format!("操作忙: {}", msg),
             BleError::QueueFull => "操作队列已满，请稍后重试".to_string(),
@@ -234,9 +195,6 @@ impl BleError {
             BleError::InvalidUuid(uuid) => {
                 format!("无效的 UUID: {}", uuid)
             }
-            BleError::ServiceNotFound(uuid) => {
-                format!("未找到服务 UUID: {}", uuid)
-            }
             BleError::CharacteristicNotFound(uuid) => {
                 format!("未找到特征值 UUID: {}", uuid)
             }
@@ -261,9 +219,6 @@ impl BleError {
             BleError::ServiceDiscoveryFailed(msg) => {
                 format!("服务发现失败: {}", msg)
             }
-            BleError::PermissionDenied(msg) => {
-                format!("权限被拒绝: {}", msg)
-            }
             BleError::Timeout(msg) => {
                 format!("操作超时: {}", msg)
             }
@@ -276,6 +231,9 @@ impl BleError {
     /// Returns the stable machine-readable error code.
     pub fn error_code(&self) -> &str {
         match self {
+            BleError::AdapterUnavailable(_) => "ADAPTER_UNAVAILABLE",
+            BleError::EventOverflow(_) => "EVENT_OVERFLOW",
+            BleError::ServicesChanged => "SERVICES_CHANGED",
             BleError::InvalidArgument(_) => "INVALID_ARGUMENT",
             BleError::Busy(_) => "BUSY",
             BleError::QueueFull => "QUEUE_FULL",
@@ -289,7 +247,6 @@ impl BleError {
             BleError::OperationFailed(_) => "OPERATION_FAILED",
             BleError::NotConnected => "NOT_CONNECTED",
             BleError::InvalidUuid(_) => "INVALID_UUID",
-            BleError::ServiceNotFound(_) => "SERVICE_NOT_FOUND",
             BleError::CharacteristicNotFound(_) => "CHARACTERISTIC_NOT_FOUND",
             BleError::ScanFailed(_) => "SCAN_FAILED",
             BleError::InitializationFailed(_) => "INITIALIZATION_FAILED",
@@ -298,7 +255,6 @@ impl BleError {
             BleError::SubscribeFailed(_) => "SUBSCRIBE_FAILED",
             BleError::UnsubscribeFailed(_) => "UNSUBSCRIBE_FAILED",
             BleError::ServiceDiscoveryFailed(_) => "SERVICE_DISCOVERY_FAILED",
-            BleError::PermissionDenied(_) => "PERMISSION_DENIED",
             BleError::Timeout(_) => "TIMEOUT",
             BleError::InternalError(_) => "INTERNAL_ERROR",
         }
@@ -316,6 +272,8 @@ impl BleError {
                 | BleError::ConnectionFailed(_)
                 | BleError::OperationFailed(_)
                 | BleError::QueueFull
+                | BleError::AdapterUnavailable(_)
+                | BleError::EventOverflow(_)
         )
     }
 }

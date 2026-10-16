@@ -8,7 +8,29 @@ permissions:
   contents: write
 
 jobs:
+  final-addon-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-15-intel, macos-latest]
+        godot: ["4.2.2", "4.6.1"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: ${{ matrix.godot }}
+          use-dotnet: false
+      - name: Validate and load the exact tag artifacts without rebuilding
+        run: |
+          python scripts/artifact_provenance.py validate
+          python scripts/test-godot.py --mode artifact
+
   validate-package-publish:
+    needs: final-addon-smoke
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,6 +39,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)" = "$version"
           python3 scripts/release-notes.py "$GITHUB_REF_NAME"
+          python3 scripts/artifact_provenance.py validate
           test -f addons/gdble/libgdble.windows.x86_64.dll
           test -f addons/gdble/libgdble.linux.x86_64.so
           test -f addons/gdble/libgdble.macos.x86_64.dylib

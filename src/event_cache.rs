@@ -19,6 +19,13 @@ impl Default for DeviceCache {
 
 impl DeviceCache {
     pub fn apply(&mut self, event: &BleEvent) {
+        if event
+            .error
+            .as_ref()
+            .is_some_and(|error| error.code == "SERVICES_CHANGED")
+        {
+            self.services.clear();
+        }
         if let Some(state) = event.connection_state {
             self.state = state;
             if state == ConnectionState::Disconnected {

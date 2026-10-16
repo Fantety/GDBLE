@@ -15,10 +15,11 @@ print(match["manifest_path"])
 btleplug_root="$(dirname "$btleplug_manifest")"
 bridge_project="$btleplug_root/src/droidplug/java"
 generated_jni="$repo_root/android-plugin/plugin/build/generated/jniLibs"
+gradle="${GDBLE_GRADLE:-$bridge_project/gradlew}"
 
-cargo ndk -t arm64-v8a -t x86_64 -o "$generated_jni" build --release --locked
-"$bridge_project/gradlew" -p "$bridge_project" assembleRelease
-"$bridge_project/gradlew" -p "$repo_root/android-plugin" :plugin:assembleRelease
+cargo ndk -t arm64-v8a -t x86_64 -o "$generated_jni" build --release --locked --target-dir target/android-build
+"$gradle" -p "$bridge_project" assembleRelease
+"$gradle" -p "$repo_root/android-plugin" :plugin:assembleRelease
 
 mkdir -p "$repo_root/addons/gdble/android"
 cp "$repo_root/android-plugin/plugin/build/outputs/aar/plugin-release.aar" \

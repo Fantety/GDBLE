@@ -23,6 +23,11 @@ def validate_android_aars(directory: Path) -> None:
             "AndroidManifest.xml",
             "classes.jar",
         ))
+        for abi in ("arm64-v8a", "x86_64"):
+            native = archive.read(f"jni/{abi}/libgdble.so")
+            for symbol in (b"gdext_rust_init", b"Java_org_gdble_android_GDBLEPlugin_initializeNative", b"Java_org_gdble_android_GDBLEPlugin_reportAdapterState"):
+                if symbol not in native:
+                    raise ValueError(f"gdble-release.aar: {abi} missing JNI/GDExtension symbol {symbol.decode()}")
 
         # Library AAR manifests are plain XML, unlike the binary XML in APKs.
         manifest = ET.fromstring(archive.read("AndroidManifest.xml"))
@@ -36,6 +41,10 @@ def validate_android_aars(directory: Path) -> None:
 
         with ZipFile(io.BytesIO(archive.read("classes.jar"))) as classes:
             require_entries(classes, ("org/gdble/android/GDBLEPlugin.class",))
+            plugin = classes.read("org/gdble/android/GDBLEPlugin.class")
+            for method in (b"getAndroidApiLevel", b"queryAdapterState", b"reportAdapterState"):
+                if method not in plugin:
+                    raise ValueError(f"gdble-release.aar: outdated plugin lacks {method.decode()}")
 
     with ZipFile(directory / "btleplug-release.aar") as archive:
         require_entries(archive, ("classes.jar",))

@@ -1,0 +1,4 @@
+# Hosted Intel macOS label introduced after the bundled actionlint runner list.
+self-hosted-runner:
+  labels:
+    - macos-15-intel

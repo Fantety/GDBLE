@@ -10,7 +10,7 @@ const ADDRESS: &str = "aa:bb:cc:dd:ee:ff";
 const SERVICE: &str = "0000180d-0000-1000-8000-00805f9b34fb";
 const CHARACTERISTIC: &str = "00002a37-0000-1000-8000-00805f9b34fb";
 
-fn runtime() -> (Arc<FakeBackend>, CoreRuntime, CoreClient) {
+pub(super) fn runtime() -> (Arc<FakeBackend>, CoreRuntime, CoreClient) {
     let backend = Arc::new(FakeBackend::default());
     backend.add_connected_device(ADDRESS);
     let runtime = CoreRuntime::spawn_with_options(
@@ -24,7 +24,7 @@ fn runtime() -> (Arc<FakeBackend>, CoreRuntime, CoreClient) {
     (backend, runtime, client)
 }
 
-fn success(runtime: &mut CoreRuntime, submission: Submission) -> OperationId {
+pub(super) fn success(runtime: &mut CoreRuntime, submission: Submission) -> OperationId {
     let id = submission.unwrap();
     let event = wait_for_event(runtime, |event| event.operation_id == id && event.terminal);
     assert_eq!(event.phase, Phase::Succeeded, "{event:?}");
@@ -218,6 +218,12 @@ fn an_ended_adapter_stream_invalidates_sessions_and_allows_reinitialization() {
         event.operation_id == scan && event.phase == Phase::Started
     });
     backend.end_adapter_stream();
+    let ended = wait_for_event(&mut runtime, |event| {
+        event.operation == Operation::Initialize
+    });
+    assert_eq!(ended.operation_id, OperationId::UNSOLICITED);
+    assert!(!ended.terminal);
+    assert_eq!(ended.phase, Phase::Failed);
     let cancelled = wait_for_event(&mut runtime, |event| {
         event.operation_id == scan && event.terminal
     });
@@ -229,12 +235,6 @@ fn an_ended_adapter_stream_invalidates_sessions_and_allows_reinitialization() {
         disconnected.connection_state,
         Some(ConnectionState::Disconnected)
     );
-    let ended = wait_for_event(&mut runtime, |event| {
-        event.operation == Operation::Initialize
-    });
-    assert_eq!(ended.operation_id, OperationId::UNSOLICITED);
-    assert!(!ended.terminal);
-    assert_eq!(ended.phase, Phase::Failed);
     assert_eq!(backend.stop_scan_calls(), 1);
     assert!(!backend.is_connected(ADDRESS));
     success(&mut runtime, client.initialize());
@@ -290,13 +290,28 @@ fn a_closed_notification_stream_is_observable_and_can_be_restarted() {
     assert_eq!(value.data, EventData::Bytes(vec![9]));
 }
 
-fn state() -> (CoreState, mpsc::Receiver<BleEvent>) {
+pub(super) fn state() -> (CoreState, mpsc::Receiver<BleEvent>) {
     let (event_tx, event_rx) = mpsc::channel(32);
     let (internal_tx, _) = mpsc::channel(32);
+    let outbox = Arc::new(EventOutbox::new(event_tx));
+    outbox.reserve_request(OperationId::new(99)).unwrap();
+    outbox.reserve_signal(SignalKey::Adapter).unwrap();
+    outbox
+        .reserve_signal(SignalKey::Device(DeviceId::parse(ADDRESS).unwrap()))
+        .unwrap();
+    outbox
+        .reserve_signal(SignalKey::Notification(DeviceId::parse(ADDRESS).unwrap()))
+        .unwrap();
     (
         CoreState {
+            data: Arc::new(DataInbox::default()),
+            adapter_tasks: JoinSet::new(),
+            adapter_attached: true,
+            adapter_state: AdapterState::PoweredOn,
+            snapshots: HashMap::new(),
+            work_generation: 0,
             backend: Arc::new(FakeBackend::default()),
-            event_tx,
+            outbox,
             internal_tx,
             initialized: true,
             initializing: false,
@@ -324,6 +339,10 @@ async fn old_notification_values_errors_and_endings_cannot_affect_a_new_pump() {
             state: ConnectionState::Connected,
             subscriptions: HashSet::from([key]),
             notification_generation: 2,
+            notification_routes: Arc::new(std::sync::Mutex::new(HashMap::from([(
+                CHARACTERISTIC.into(),
+                OperationId::new(99),
+            )]))),
             notification_cancellation: Some(CancellationToken::new()),
             ..DeviceSession::default()
         },
@@ -334,6 +353,7 @@ async fn old_notification_values_errors_and_endings_cannot_affect_a_new_pump() {
             InternalEvent::Notification {
                 device: device.clone(),
                 generation: 1,
+                route: Some(OperationId::new(99)),
                 notification: BackendNotification {
                     characteristic_uuid: CHARACTERISTIC.to_string(),
                     value: vec![1],
@@ -368,6 +388,7 @@ async fn old_notification_values_errors_and_endings_cannot_affect_a_new_pump() {
             InternalEvent::Notification {
                 device: device.clone(),
                 generation: 2,
+                route: Some(OperationId::new(99)),
                 notification: BackendNotification {
                     characteristic_uuid: CHARACTERISTIC.to_string(),
                     value: vec![2],

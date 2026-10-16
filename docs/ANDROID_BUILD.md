@@ -10,6 +10,7 @@ GDBLE 0.6.0 uses the Godot Android v2 plugin architecture. Android exports requi
 - Rust targets `aarch64-linux-android` and `x86_64-linux-android`
 - `cargo install cargo-ndk`
 - `ANDROID_NDK_HOME` set to the NDK directory
+- Optional `GDBLE_GRADLE` pointing to an installed Gradle 8.9+ executable; otherwise the locked btleplug wrapper is used. Prefer Gradle 8.9 for reproducible AGP 8.7.3 builds.
 
 ## Build
 
@@ -35,24 +36,30 @@ The GDBLE AAR contains the Kotlin `GodotPlugin`, ARM64/x86_64 `libgdble.so`, and
 2. Install the Godot Android build template and enable Gradle Build.
 3. Set min SDK 23 and target SDK 34.
 4. Enable ARM64; optionally enable x86_64 for emulator loading tests.
-5. Request runtime permissions before calling `BluetoothManager.initialize()`:
+5. Gate initialization on the complete runtime permission result. Both demos use the same helper:
 
 ```gdscript
-if OS.get_name() == "Android":
-    OS.request_permissions()
-bluetooth_manager.initialize()
+var startup = preload("res://addons/gdble/permission_startup.gd").new()
+add_child(startup)
+startup.permission_denied.connect(func(missing):
+    print("BLE remains uninitialized; enable permissions in Settings: ", missing))
+startup.start(bluetooth_manager)
 ```
 
-The plugin never opens permission dialogs automatically.
+The native plugin never opens permission dialogs automatically. This opt-in application helper checks granted permissions first, requests once if needed, and rereads the complete set after `SceneTree.on_request_permissions_result`. It uses `GDBLE.getAndroidApiLevel()` instead of inferring API level from a human-readable OS version. Partial or permanent denial leaves the Manager uninitialized and emits `permission_denied`. Returning from Settings or the background checks permissions again without opening another dialog. Applications decide whether to offer an explicit retry UI.
 
 ## Permissions
 
 | Android version | Permissions |
 | --- | --- |
-| API 23–30 | BLUETOOTH, BLUETOOTH_ADMIN, ACCESS_FINE_LOCATION |
+| API 23–30 | BLUETOOTH and BLUETOOTH_ADMIN in the manifest; ACCESS_FINE_LOCATION at runtime |
 | API 31+ | BLUETOOTH_SCAN, BLUETOOTH_CONNECT |
 
 No-adapter, denied-permission, or JNI initialization failures must surface through `ble_event` and must not panic.
+
+The permission gate avoids initializing after denial and reports through its own `permission_denied` signal. Apps bypassing it receive backend failures through `ble_event`. On older Android versions, scanning may additionally require the system location service to be enabled.
+
+btleplug 0.12 reports an unknown adapter state on Android. The GDBLE v2 plugin therefore queries the real `BluetoothAdapter` through JNI and forwards protected Bluetooth power broadcasts into a bounded state stream. Missing permission and turning-on/off states remain unavailable. Activity recreation updates the context bridge; returning to the foreground refreshes availability without reconnecting devices.
 
 ## Validation
 
@@ -64,3 +71,5 @@ Inspect both AARs before release:
 - JNI initialization is idempotent.
 
 Release validation requires API 23–30 and API 31+ ARM64 devices for scan/connect/discover/read/write/notify/remote-disconnect, plus an x86_64 emulator loading test.
+
+Run `python scripts/test-godot.py --mode permissions` for already-granted, first-grant, partial-denial, permanent-denial, and foreground transition cases. These deterministic tests and AAR structure checks do not replace the real-device BLE loop. Record missing device evidence as incomplete.

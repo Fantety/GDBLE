@@ -44,6 +44,8 @@
 
 **当前版本：0.6.0 · Godot 4.2+**
 
+本轮修复的测试与待完成发行验收见 [修复验收记录](docs/REPAIR_VALIDATION.md)。发布前必须通过源码摘要、最终 addon 冒烟和真机验收；`BUILD_INFO.json` 的 `release_ready = false` 表示产物尚未齐备。
+
 面向 Godot 4.2+ 的 Rust BLE GDExtension，基于 btleplug 0.12.0。支持扫描、连接、GATT 服务发现、读写和通知，并保留 0.5.x 的类名、方法参数与旧信号。
 
 **插件地址**: [GDBLE - Godot Asset Library](https://godotengine.org/asset-library/asset/3439)
@@ -121,6 +123,9 @@ your_project/
     └── gdble/
         ├── gdble.gdextension
         ├── gdble.gdap
+        ├── permission_startup.gd
+        ├── BUILD_INFO.json
+        ├── SHA256SUMS
         ├── libgdble.windows.x86_64.dll
         ├── libgdble.linux.x86_64.so
         ├── libgdble.macos.x86_64.dylib
@@ -137,7 +142,7 @@ your_project/
 - API 23–30：`BLUETOOTH`、`BLUETOOTH_ADMIN`、`ACCESS_FINE_LOCATION`
 - API 31+：`BLUETOOTH_SCAN`、`BLUETOOTH_CONNECT`
 
-应用应在 `BluetoothManager.initialize()` 前调用 `OS.request_permissions()`。Android 发行物是 `gdble-release.aar` 与独立的 `btleplug-release.aar`，不是 raw `.so` 或 fat AAR。
+应用必须先检查授权，并在权限回调后确认所需权限全部满足，才能调用 `BluetoothManager.initialize()`。两份 Demo 复用 `permission_startup.gd`：拒绝时保持未初始化并提示，返回前台只重新检查，不循环弹窗。Android 发行物是 `gdble-release.aar` 与独立的 `btleplug-release.aar`。
 
 Android 导出需启用 Gradle Build，minSdk 23、compileSdk 34；配置步骤见 [Android 构建指南](docs/ANDROID_BUILD.md)。
 
@@ -179,11 +184,11 @@ func _ready() -> void:
     bluetooth.device_discovered.connect(_on_discovered)
     bluetooth.ble_event.connect(_on_ble_event)
 
-    if OS.get_name() == "Android":
-        OS.request_permissions()
-
-    var initialize_id := bluetooth.initialize()
-    print("initialize operation: ", initialize_id)
+    var startup = preload("res://addons/gdble/permission_startup.gd").new()
+    add_child(startup)
+    startup.permission_denied.connect(func(missing):
+        print("蓝牙未初始化，请在系统设置中授权：", missing))
+    startup.start(bluetooth)
 
 func _on_initialized(success: bool, error: String) -> void:
     if success:
@@ -305,9 +310,15 @@ func _on_ble_event(event: Dictionary) -> void:
 
 扫描 progress 事件的 DeviceInfo `data` 额外包含 `kind: StringName`，值为 `discovered` 或 `updated`。
 
-常用新增错误码：`INVALID_ARGUMENT`、`NOT_INITIALIZED`、`BUSY`、`QUEUE_FULL`、`CANCELLED`、`ANDROID_NOT_INITIALIZED`、`AMBIGUOUS_CHARACTERISTIC`。旧错误信号继续输出兼容文本。
+常用新增错误码：`INVALID_ARGUMENT`、`NOT_INITIALIZED`、`BUSY`、`QUEUE_FULL`、`CANCELLED`、`ANDROID_NOT_INITIALIZED`、`AMBIGUOUS_CHARACTERISTIC`、`ADAPTER_UNAVAILABLE`、`EVENT_OVERFLOW`、`SERVICES_CHANGED`。旧错误信号继续输出兼容文本。
+
+每个请求接纳前预留开始和终止事件容量，预留失败同步返回 `QUEUE_FULL`，不会执行后端操作。命令容量 64、外发事件容量 1024、每帧最多处理 256 项。控制事件与高频数据分开传递；扫描拥塞时按设备合并并淘汰最旧待发更新，报告 `EVENT_OVERFLOW`。非请求错误统一使用 `operation_id = 0`、`terminal = false`。反复的非请求状态变化在拥塞时可合并为最新状态，请求终止结果不会合并。
 
 同一设备只使用一个 notification pump。订阅身份是完整 `(service_uuid, characteristic_uuid)`；btleplug 通知不携带 service UUID，因此跨服务订阅相同 characteristic UUID 会返回 `AMBIGUOUS_CHARACTERISTIC`。
+
+通知接收器在后端订阅前准备就绪。订阅期间最多暂存 64 条、64 KiB，成功事件先发出，再按顺序投递数据。任一通知缓冲溢出会发出 `EVENT_OVERFLOW`（`error.details.source` 标明来源），停止该设备通知并清理未交付数据，保持连接；应用需要重新订阅。通知失败同时转发到旧 `operation_failed` 信号。
+
+蓝牙关闭或状态未知时，`initialize` 非终止失败事件返回 `ADAPTER_UNAVAILABLE`，`error.details.state` 为 `powered_off` 或 `unknown`；初始化缓存立即失效，扫描和设备操作被取消。恢复供电时发送 `initialize` progress 提示，`data.reason = powered_on`，应用显式再次初始化。服务变化通过 `SERVICES_CHANGED` 使 GATT 缓存和订阅失效，需要重新发现服务后订阅。不会自动重连。
 
 ---
 

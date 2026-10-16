@@ -28,6 +28,7 @@ impl ScanControl {
 #[derive(Clone)]
 pub struct CoreClient {
     command_tx: mpsc::Sender<CoreCommand>,
+    outbox: Arc<EventOutbox>,
     scan_control: Arc<ScanControl>,
     next_operation_id: Arc<AtomicI64>,
 }
@@ -180,10 +181,19 @@ impl CoreClient {
         context: EventContext,
         command: CoreCommand,
     ) -> Submission {
+        self.outbox.reserve_request(operation_id).map_err(|error| {
+            Box::new(BleEvent::failed(
+                operation,
+                operation_id,
+                context.clone(),
+                error,
+            ))
+        })?;
         self.command_tx
             .try_send(command)
             .map(|()| operation_id)
             .map_err(|error| {
+                self.outbox.release_request(operation_id);
                 let error = match error {
                     mpsc::error::TrySendError::Full(_) => BleError::QueueFull,
                     mpsc::error::TrySendError::Closed(_) => {
@@ -281,9 +291,11 @@ impl CoreRuntime {
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
         let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        let outbox = Arc::new(EventOutbox::new(event_tx));
         let scan_control = Arc::new(ScanControl::default());
         let client = CoreClient {
             command_tx,
+            outbox: outbox.clone(),
             scan_control: scan_control.clone(),
             next_operation_id: Arc::new(AtomicI64::new(1)),
         };
@@ -309,7 +321,7 @@ impl CoreRuntime {
                     run_core(
                         backend,
                         command_rx,
-                        event_tx,
+                        outbox,
                         scan_control,
                         worker_shutdown,
                         options,
@@ -335,15 +347,24 @@ impl CoreRuntime {
     }
 
     pub fn try_recv(&mut self) -> Option<BleEvent> {
-        self.event_rx.try_recv().ok()
+        loop {
+            let event = self.event_rx.try_recv().ok();
+            self.client.outbox.flush();
+            match event {
+                Some(event) if !self.client.outbox.is_current(&event) => continue,
+                event => return event,
+            }
+        }
     }
 
     pub fn shutdown(&mut self) {
         if let Some(worker) = self.worker.take() {
             self.shutdown.cancel();
+            self.client.outbox.clear();
             if worker.join().is_err() {
                 eprintln!("[GDBLE] Core worker panicked during shutdown");
             }
+            self.client.outbox.clear();
         }
     }
 }
@@ -364,7 +385,7 @@ mod tests {
         let mut runtime = CoreRuntime::spawn_with_backend(Arc::new(FakeBackend::default()));
         let client = runtime.client();
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        while runtime.event_rx.len() < EVENT_CHANNEL_CAPACITY {
+        while runtime.event_rx.capacity() > 1 {
             for _ in 0..COMMAND_CHANNEL_CAPACITY {
                 let _ = client.initialize();
             }
@@ -382,8 +403,10 @@ mod tests {
     #[test]
     fn stopping_a_queued_scan_does_not_need_command_capacity() {
         let (command_tx, mut command_rx) = mpsc::channel(1);
+        let (event_tx, _event_rx) = mpsc::channel(8);
         let client = CoreClient {
             command_tx,
+            outbox: Arc::new(EventOutbox::new(event_tx)),
             scan_control: Arc::new(ScanControl::default()),
             next_operation_id: Arc::new(AtomicI64::new(1)),
         };

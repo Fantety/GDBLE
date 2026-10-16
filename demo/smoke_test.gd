@@ -19,6 +19,7 @@ func _initialize() -> void:
 
 	# Resolve extension classes only after loading, not while parsing this script.
 	var manager = ClassDB.instantiate(&"BluetoothManager")
+	assert(not manager.has_method(&"test_use_fake_backend"))
 	root.add_child(manager)
 	assert(manager.has_signal(&"ble_event"))
 	manager.ble_event.connect(func(event: Dictionary): events.append(event))

@@ -45,10 +45,11 @@ func _ready():
 	print("Initializing Bluetooth adapter...")
 	# 关闭调试模式以保持输出清洁（开发时可设为 true）
 	bluetooth_manager.set_debug_mode(false)
-	# Android 插件只声明权限，不自动弹框；必须在初始化前由应用请求。
-	if OS.get_name() == "Android":
-		OS.request_permissions()
-	bluetooth_manager.initialize()
+	# 共享启动器等待所有必需权限获批，再初始化；回到前台只检查，不重复弹窗。
+	var startup = preload("res://addons/gdble/permission_startup.gd").new()
+	add_child(startup)
+	startup.permission_denied.connect(func(missing): print("蓝牙未初始化，请在系统设置中授权：", missing))
+	startup.start(bluetooth_manager)
 
 func setup_signals():
 	"""连接所有蓝牙管理器和设备的信号"""

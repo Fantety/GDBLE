@@ -102,14 +102,28 @@ jobs:
           mkdir -p addons/gdble/android
           cp release-artifacts/libgdble.* addons/gdble/
           cp release-artifacts/*.aar addons/gdble/android/
-          (cd addons/gdble && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          python3 scripts/artifact_provenance.py generate
+          python3 scripts/artifact_provenance.py validate
           ! find addons/gdble -maxdepth 1 -type f \( -name 'gdble.dll' -o -name 'libgdble.android.*.so' -o -name 'libgdble.arm64.so' -o -name 'libgdble.x86_64.so' \) | grep .
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: "4.2.2"
+          use-dotnet: false
+      - name: Smoke-test the assembled addon (no compilation)
+        run: python3 scripts/test-godot.py --mode artifact
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: "4.6.1"
+          use-dotnet: false
+      - name: Smoke-test the assembled addon on current Godot
+        run: python3 scripts/test-godot.py --mode artifact
       - uses: peter-evans/create-pull-request@v7
         with:
           branch: release/v${{ inputs.version }}
           commit-message: "chore: prepare GDBLE v${{ inputs.version }}"
           title: "Release GDBLE v${{ inputs.version }}"
           body: |
-            Prepared release artifacts, canonical addon contents, and SHA-256 hashes.
+            Prepared release artifacts, embedded source provenance, SHA-256 hashes, and final-addon smoke tests.
+            Real Android BLE evidence for API 23–30 and API 31+ is required before release.
             Merge this PR before creating tag `v${{ inputs.version }}` on the merge commit.
           add-paths: addons/gdble

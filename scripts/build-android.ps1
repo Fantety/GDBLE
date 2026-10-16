@@ -19,9 +19,10 @@ try {
     $btleplugRoot = Split-Path -Parent $btleplug.manifest_path
     $bridgeProject = Join-Path $btleplugRoot "src\droidplug\java"
     $gradlew = Join-Path $bridgeProject "gradlew.bat"
+    if ($env:GDBLE_GRADLE) { $gradlew = $env:GDBLE_GRADLE }
     $generatedJni = Join-Path $repoRoot "android-plugin\plugin\build\generated\jniLibs"
 
-    cargo ndk -t arm64-v8a -t x86_64 -o $generatedJni build --release --locked
+    cargo ndk -t arm64-v8a -t x86_64 -o $generatedJni build --release --locked --target-dir target/android-build
     if ($LASTEXITCODE -ne 0) {
         throw "Android Cargo build failed with exit code $LASTEXITCODE"
     }

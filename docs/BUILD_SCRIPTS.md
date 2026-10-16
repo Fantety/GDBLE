@@ -12,6 +12,10 @@
 
 All Cargo commands use `--locked`. Android builds require `cargo-ndk`, JDK 17, SDK 34, and `ANDROID_NDK_HOME`.
 
+Desktop and Android scripts use `target/desktop-build` and `target/android-build`. Tests use independent directories (`target/repair-build`, `target/godot-source-build`, `target/godot-harness-build`); never share a Cargo target directory with copied review fixtures. The optional `test-harness` feature is exclusively for integration tests and must not be used to build release artifacts.
+
+`scripts/artifact_provenance.py generate|validate` records/checks embedded build information and the complete addon hash inventory. `scripts/test-godot.py --mode artifact` validates the actual packaged library without compiling; `--mode source`, `--mode harness`, and `--mode permissions` cover fresh source, callback success paths, and permission transitions. Pass `--godot /absolute/path/to/godot` when it is not on PATH.
+
 PowerShell scripts check each native build command's exit code before copying its output. Both Android scripts resolve Cargo metadata from the repository root, so callers may start them from another directory.
 
 Desktop output names:

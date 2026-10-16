@@ -295,7 +295,8 @@ impl BleDevice {
                 | Operation::Read
                 | Operation::Write
                 | Operation::Subscribe
-                | Operation::Unsubscribe,
+                | Operation::Unsubscribe
+                | Operation::Notification,
                 Phase::Failed | Phase::Cancelled,
             ) => self.emit_operation_failed(event),
             _ => {}

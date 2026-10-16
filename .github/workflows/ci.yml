@@ -7,6 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target/ci-build
 
 jobs:
   quality:
@@ -49,6 +50,9 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libudev-dev
       - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Windows backend mapping and lifecycle regression tests
+        if: runner.os == 'Windows'
+        run: cargo test --all-targets --all-features --locked
       - name: Build script failure regression tests
         if: runner.os == 'Windows'
         run: .\scripts\test-build-failures.ps1
@@ -63,18 +67,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux BLE dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libudev-dev
-      - run: cargo build --release --locked
-      - name: Generate Demo addon
-        run: |
-          cp target/release/libgdble.so addons/gdble/libgdble.linux.x86_64.so
-          bash scripts/sync-demo-addon.sh
       - uses: chickensoft-games/setup-godot@v2
         with:
           version: ${{ matrix.godot }}
           use-dotnet: false
-      - name: Run Godot smoke test
-        timeout-minutes: 2
-        run: godot --headless --path demo --script smoke_test.gd
+      - name: Verify source, callback reentry, and permission state machine
+        run: |
+          python3 scripts/test-godot.py --mode source
+          python3 scripts/test-godot.py --mode harness
+          python3 scripts/test-godot.py --mode permissions
 
   android-aar:
     runs-on: ubuntu-latest

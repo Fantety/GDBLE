@@ -75,6 +75,25 @@ impl INode for BluetoothManager {
 
 #[godot_api]
 impl BluetoothManager {
+    #[cfg(feature = "test-harness")]
+    #[func]
+    fn test_use_fake_backend(&mut self) {
+        use crate::backend::test_support::FakeBackend;
+        use std::sync::Arc;
+        assert!(!self.initialized && self.devices.is_empty());
+        if let Some(mut core) = self.core.take() {
+            core.shutdown();
+        }
+        let backend = Arc::new(FakeBackend::default());
+        for address in ["aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"] {
+            backend.add_connected_device(address);
+        }
+        backend.echo_local_disconnect();
+        let core = CoreRuntime::spawn_with_backend(backend);
+        self.client = core.client();
+        self.core = Some(core);
+    }
+
     #[signal]
     fn ble_event(event: VarDictionary);
 
@@ -283,6 +302,9 @@ impl BluetoothManager {
 
         if !event.context.device_address.is_empty() {
             if let Some(mut device) = self.devices.get(&event.context.device_address).cloned() {
+                // Keep the guard alive across *all* device callbacks. They may
+                // synchronously read or call this Manager again through Godot.
+                let _reentrant = self.base_mut();
                 device.bind_mut().apply_core_event(&event);
             }
         }

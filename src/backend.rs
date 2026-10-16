@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use btleplug::api::{
-    Central as _, CentralEvent, CharPropFlags, Characteristic, Manager as _, Peripheral as _,
-    ScanFilter, WriteType,
+    Central as _, CentralEvent, CentralState, CharPropFlags, Characteristic, Manager as _,
+    Peripheral as _, ScanFilter, WriteType,
 };
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use futures::{Stream, StreamExt};
@@ -22,10 +22,65 @@ pub type NotificationStream =
     Pin<Box<dyn Stream<Item = Result<BackendNotification, BleError>> + Send + 'static>>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AdapterState {
+    Unknown,
+    PoweredOff,
+    PoweredOn,
+}
+
+impl AdapterState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::PoweredOff => "powered_off",
+            Self::PoweredOn => "powered_on",
+        }
+    }
+}
+
+impl From<CentralState> for AdapterState {
+    fn from(state: CentralState) -> Self {
+        match state {
+            CentralState::Unknown => Self::Unknown,
+            CentralState::PoweredOff => Self::PoweredOff,
+            CentralState::PoweredOn => Self::PoweredOn,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AdvertisementUpdate {
+    Refresh,
+    Rssi(i16),
+    ManufacturerData(HashMap<u16, Vec<u8>>),
+    ServiceData(HashMap<String, Vec<u8>>),
+    Services(Vec<String>),
+}
+
+impl AdvertisementUpdate {
+    pub fn apply(&self, info: &mut DeviceInfo) {
+        match self {
+            Self::Refresh => {}
+            Self::Rssi(value) => info.rssi = Some(*value),
+            Self::ManufacturerData(value) => info.manufacturer_data = value.clone(),
+            Self::ServiceData(value) => info.service_data = value.clone(),
+            Self::Services(value) => info.services = value.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BackendEvent {
+    // Full snapshots are injected only by the deterministic backend tests.
+    #[cfg_attr(not(test), allow(dead_code))]
     Discovered(DeviceInfo),
-    Updated(DeviceInfo),
     Disconnected(DeviceId),
+    Changed {
+        device: DeviceId,
+        update: AdvertisementUpdate,
+    },
+    StateChanged(AdapterState),
+    ServicesChanged(DeviceId),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,6 +92,9 @@ pub struct BackendNotification {
 #[async_trait]
 pub trait BleBackend: Send + Sync {
     async fn initialize(&self) -> Result<(AdapterInfo, BackendEventStream), BleError>;
+    async fn adapter_state(&self) -> Result<AdapterState, BleError>;
+    async fn device_info(&self, device: &DeviceId) -> Result<DeviceInfo, BleError>;
+    async fn is_connected(&self, device: &DeviceId) -> Result<bool, BleError>;
     async fn start_scan(&self) -> Result<(), BleError>;
     async fn stop_scan(&self) -> Result<(), BleError>;
     async fn connect(&self, device: &DeviceId) -> Result<(), BleError>;
@@ -134,43 +192,49 @@ impl BtleplugBackend {
         ))
     }
 
-    async fn map_event(&self, event: CentralEvent) -> Option<Result<BackendEvent, BleError>> {
-        match event {
-            CentralEvent::DeviceDiscovered(id) => {
-                let adapter = match self.adapter().await {
-                    Ok(adapter) => adapter,
-                    Err(error) => return Some(Err(error)),
-                };
-                let peripheral = match adapter.peripheral(&id).await {
-                    Ok(peripheral) => peripheral,
-                    Err(error) => {
-                        return Some(Err(BleError::DeviceNotFound(error.to_string())));
-                    }
-                };
-                Some(
-                    self.snapshot(&peripheral)
-                        .await
-                        .map(BackendEvent::Discovered),
-                )
+    // Never await properties here: a slow snapshot must not hold up power or
+    // connection events from the same adapter stream.
+    fn map_event(event: CentralEvent) -> Option<Result<BackendEvent, BleError>> {
+        let (id, update) = match event {
+            CentralEvent::DeviceDiscovered(id) | CentralEvent::DeviceUpdated(id) => {
+                (id, AdvertisementUpdate::Refresh)
             }
-            CentralEvent::DeviceUpdated(id) => {
-                let adapter = match self.adapter().await {
-                    Ok(adapter) => adapter,
-                    Err(error) => return Some(Err(error)),
-                };
-                let peripheral = match adapter.peripheral(&id).await {
-                    Ok(peripheral) => peripheral,
-                    Err(error) => {
-                        return Some(Err(BleError::DeviceNotFound(error.to_string())));
-                    }
-                };
-                Some(self.snapshot(&peripheral).await.map(BackendEvent::Updated))
-            }
+            CentralEvent::RssiUpdate { id, rssi } => (id, AdvertisementUpdate::Rssi(rssi)),
+            CentralEvent::ManufacturerDataAdvertisement {
+                id,
+                manufacturer_data,
+            } => (id, AdvertisementUpdate::ManufacturerData(manufacturer_data)),
+            CentralEvent::ServiceDataAdvertisement { id, service_data } => (
+                id,
+                AdvertisementUpdate::ServiceData(
+                    service_data
+                        .into_iter()
+                        .map(|(id, data)| (id.to_string(), data))
+                        .collect(),
+                ),
+            ),
+            CentralEvent::ServicesAdvertisement { id, services } => (
+                id,
+                AdvertisementUpdate::Services(
+                    services.into_iter().map(|id| id.to_string()).collect(),
+                ),
+            ),
             CentralEvent::DeviceDisconnected(id) => {
-                Some(DeviceId::parse(&id.to_string()).map(BackendEvent::Disconnected))
+                return Some(DeviceId::parse(&id.to_string()).map(BackendEvent::Disconnected))
             }
-            _ => None,
-        }
+            CentralEvent::DeviceServicesModified(id) => {
+                return Some(DeviceId::parse(&id.to_string()).map(BackendEvent::ServicesChanged))
+            }
+            CentralEvent::StateUpdate(state) => {
+                return Some(Ok(BackendEvent::StateChanged(state.into())))
+            }
+            // Connect requests are completed by their backend future. Do not
+            // create an extra public connected signal for its system echo.
+            CentralEvent::DeviceConnected(_) => return None,
+        };
+        Some(
+            DeviceId::parse(&id.to_string()).map(|device| BackendEvent::Changed { device, update }),
+        )
     }
 
     async fn characteristic(
@@ -227,15 +291,38 @@ impl BleBackend for BtleplugBackend {
         self.inner.peripherals.write().await.clear();
         *self.inner.adapter.write().await = Some(adapter);
 
-        let backend = self.clone();
-        let stream = events
-            .then(move |event| {
-                let backend = backend.clone();
-                async move { backend.map_event(event).await }
-            })
-            .filter_map(|event| async move { event });
+        let stream: BackendEventStream =
+            Box::pin(events.filter_map(|event| async move { Self::map_event(event) }));
+        #[cfg(target_os = "android")]
+        let stream = crate::android::with_adapter_states(stream);
 
-        Ok((AdapterInfo::new(name, None), Box::pin(stream)))
+        Ok((AdapterInfo::new(name, None), stream))
+    }
+
+    async fn adapter_state(&self) -> Result<AdapterState, BleError> {
+        #[cfg(target_os = "android")]
+        {
+            crate::android::adapter_state()
+        }
+        #[cfg(not(target_os = "android"))]
+        self.adapter()
+            .await?
+            .adapter_state()
+            .await
+            .map(Into::into)
+            .map_err(|error| BleError::OperationFailed(error.to_string()))
+    }
+
+    async fn device_info(&self, device: &DeviceId) -> Result<DeviceInfo, BleError> {
+        self.snapshot(&self.peripheral(device).await?).await
+    }
+
+    async fn is_connected(&self, device: &DeviceId) -> Result<bool, BleError> {
+        self.peripheral(device)
+            .await?
+            .is_connected()
+            .await
+            .map_err(|error| BleError::OperationFailed(error.to_string()))
     }
 
     async fn start_scan(&self) -> Result<(), BleError> {
@@ -386,5 +473,9 @@ impl BleBackend for BtleplugBackend {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-harness"))]
+#[cfg_attr(not(test), allow(dead_code))]
 pub mod test_support;
+
+#[cfg(all(test, any(target_os = "windows", target_os = "macos")))]
+mod mapping_tests;

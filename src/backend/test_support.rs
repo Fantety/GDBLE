@@ -21,6 +21,10 @@ pub enum Fault {
 
 #[derive(Default)]
 struct FakeState {
+    availability: Option<AdapterState>,
+    disconnect_echo: bool,
+    subscribe_notification: Option<Vec<u8>>,
+    subscribe_error: Option<BleError>,
     devices: HashMap<DeviceId, DeviceInfo>,
     connected: HashSet<DeviceId>,
     fail_next_scan_start: Option<BleError>,
@@ -48,6 +52,37 @@ impl Default for FakeBackend {
 }
 
 impl FakeBackend {
+    pub fn echo_local_disconnect(&self) {
+        self.state.lock().unwrap().disconnect_echo = true;
+    }
+
+    pub fn notify_on_subscribe(&self, value: Vec<u8>) {
+        self.state.lock().unwrap().subscribe_notification = Some(value);
+    }
+
+    pub fn fail_subscribe(&self, error: BleError) {
+        self.state.lock().unwrap().subscribe_error = Some(error);
+    }
+
+    pub fn emit_backend(&self, event: BackendEvent) {
+        if let Some(sender) = self.event_tx.lock().unwrap().as_ref() {
+            // Cleanup may disconnect after the adapter listener is dropped.
+            if let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(Ok(event)) {
+                panic!("fake adapter event producer exceeded its bounded capacity");
+            }
+        }
+    }
+
+    pub fn set_adapter_state(&self, state: AdapterState) {
+        self.state.lock().unwrap().availability = Some(state.clone());
+        self.emit_backend(BackendEvent::StateChanged(state));
+    }
+
+    pub fn emit_disconnect_echo(&self, address: &str) {
+        self.emit_backend(BackendEvent::Disconnected(
+            DeviceId::parse(address).unwrap(),
+        ));
+    }
     pub fn fault_next(&self, operation: &'static str, fault: Fault) {
         self.state.lock().unwrap().faults.insert(operation, fault);
     }
@@ -203,6 +238,33 @@ impl BleBackend for FakeBackend {
         ))
     }
 
+    async fn adapter_state(&self) -> Result<AdapterState, BleError> {
+        self.apply_fault("adapter_state").await;
+        Ok(self
+            .state
+            .lock()
+            .unwrap()
+            .availability
+            .clone()
+            .unwrap_or(AdapterState::PoweredOn))
+    }
+
+    async fn device_info(&self, device: &DeviceId) -> Result<DeviceInfo, BleError> {
+        self.apply_fault("snapshot").await;
+        self.state
+            .lock()
+            .unwrap()
+            .devices
+            .get(device)
+            .cloned()
+            .ok_or_else(|| BleError::DeviceNotFound(device.as_str().to_string()))
+    }
+
+    async fn is_connected(&self, device: &DeviceId) -> Result<bool, BleError> {
+        self.apply_fault("is_connected").await;
+        Ok(self.state.lock().unwrap().connected.contains(device))
+    }
+
     async fn start_scan(&self) -> Result<(), BleError> {
         self.apply_fault("start_scan").await;
         if let Some(error) = self.state.lock().unwrap().fail_next_scan_start.take() {
@@ -245,6 +307,10 @@ impl BleBackend for FakeBackend {
     async fn disconnect(&self, device: &DeviceId) -> Result<(), BleError> {
         self.apply_fault("disconnect").await;
         self.state.lock().unwrap().connected.remove(device);
+        if self.state.lock().unwrap().disconnect_echo {
+            self.emit_backend(BackendEvent::Disconnected(device.clone()));
+        }
+        self.apply_fault("disconnect_after_event").await;
         Ok(())
     }
 
@@ -275,6 +341,15 @@ impl BleBackend for FakeBackend {
 
     async fn subscribe(&self, device: &DeviceId, _key: &GattKey) -> Result<(), BleError> {
         self.apply_fault("subscribe").await;
+        let value = self.state.lock().unwrap().subscribe_notification.take();
+        if let Some(value) = value {
+            self.emit_notification(_key.characteristic_uuid(), value);
+        }
+        self.apply_fault("subscribe_after_notification").await;
+        let error = self.state.lock().unwrap().subscribe_error.take();
+        if let Some(error) = error {
+            return Err(error);
+        }
         self.ensure_connected(device)
     }
 
@@ -305,16 +380,17 @@ fn tokio_stream<T: Send + 'static>(
     })
 }
 
-fn broadcast_stream<T: Clone + Send + 'static>(
-    receiver: broadcast::Receiver<T>,
-) -> impl Stream<Item = T> + Send + 'static {
+fn broadcast_stream(
+    receiver: broadcast::Receiver<Result<BackendNotification, BleError>>,
+) -> impl Stream<Item = Result<BackendNotification, BleError>> + Send + 'static {
     futures::stream::unfold(receiver, |mut receiver| async move {
-        loop {
-            match receiver.recv().await {
-                Ok(item) => return Some((item, receiver)),
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => return None,
-            }
+        match receiver.recv().await {
+            Ok(item) => Some((item, receiver)),
+            Err(broadcast::error::RecvError::Lagged(_)) => Some((
+                Err(BleError::EventOverflow("backend_notifications".into())),
+                receiver,
+            )),
+            Err(broadcast::error::RecvError::Closed) => None,
         }
     })
 }

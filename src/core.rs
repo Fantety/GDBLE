@@ -12,7 +12,8 @@ use tokio::task::{AbortHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
 use crate::backend::{
-    BackendEvent, BackendEventStream, BackendNotification, BleBackend, BtleplugBackend,
+    AdapterState, AdvertisementUpdate, BackendEvent, BackendEventStream, BackendNotification,
+    BleBackend, BtleplugBackend,
 };
 use crate::ble_service::BleServiceInfo;
 pub use crate::types::{AdapterInfo, BleError, DeviceInfo};
@@ -22,9 +23,15 @@ pub const EVENT_CHANNEL_CAPACITY: usize = 1024;
 const INTERNAL_CHANNEL_CAPACITY: usize = 256;
 
 mod client;
+mod inbox;
+mod lifecycle;
+mod notifications;
+mod outbox;
 mod protocol;
 use client::ScanControl;
 pub use client::{CoreClient, CoreRuntime, Submission};
+use inbox::DataInbox;
+use outbox::{EventOutbox, SignalKey};
 pub use protocol::*;
 
 #[derive(Clone, Copy)]
@@ -110,9 +117,30 @@ impl DeviceAction {
 }
 
 enum InternalEvent {
+    Snapshot {
+        device: DeviceId,
+        generation: u64,
+        result: Result<DeviceInfo, BleError>,
+    },
+    DataOverflow {
+        generation: u64,
+    },
+    ConnectionChecked {
+        device: DeviceId,
+        epoch: u64,
+        result: Result<bool, BleError>,
+    },
+    NotificationReady {
+        device: DeviceId,
+        generation: u64,
+    },
+    NotificationCleanup {
+        device: DeviceId,
+        epoch: u64,
+    },
     Initialized {
         operation_id: OperationId,
-        result: Result<(AdapterInfo, BackendEventStream), BleError>,
+        result: Result<(AdapterInfo, AdapterState, BackendEventStream), BleError>,
     },
     Backend {
         generation: u64,
@@ -146,6 +174,7 @@ enum InternalEvent {
     Notification {
         device: DeviceId,
         generation: u64,
+        route: Option<OperationId>,
         notification: BackendNotification,
     },
     NotificationPumpFailed {
@@ -198,6 +227,21 @@ struct QueuedOperation {
 }
 
 struct DeviceSession {
+    connection_epoch: u64,
+    local_disconnect_observed: bool,
+    has_local_disconnect: bool,
+    suspect_disconnect: bool,
+    checking_connection: bool,
+    connection_completion: Option<(OperationId, DeviceAction, Result<EventData, BleError>)>,
+    cleanup_keys: HashSet<GattKey>,
+    cleanup_running: bool,
+    notification_ready: bool,
+    notification_cleanup: bool,
+    subscribing: Option<GattKey>,
+    notification_routes: Arc<std::sync::Mutex<HashMap<String, OperationId>>>,
+    notification_buffer: VecDeque<BackendNotification>,
+    notification_buffer_bytes: usize,
+    services_invalidated: bool,
     state: ConnectionState,
     generation: u64,
     in_flight: Option<InFlightOperation>,
@@ -211,6 +255,21 @@ struct DeviceSession {
 impl Default for DeviceSession {
     fn default() -> Self {
         Self {
+            connection_epoch: 0,
+            local_disconnect_observed: false,
+            has_local_disconnect: false,
+            suspect_disconnect: false,
+            checking_connection: false,
+            connection_completion: None,
+            cleanup_keys: HashSet::new(),
+            cleanup_running: false,
+            notification_ready: false,
+            notification_cleanup: false,
+            subscribing: None,
+            notification_routes: Arc::default(),
+            notification_buffer: VecDeque::new(),
+            notification_buffer_bytes: 0,
+            services_invalidated: false,
             state: ConnectionState::Disconnected,
             generation: 0,
             in_flight: None,
@@ -223,9 +282,18 @@ impl Default for DeviceSession {
     }
 }
 
+struct PendingSnapshot {
+    updates: Vec<AdvertisementUpdate>,
+}
+
 struct CoreState {
+    data: Arc<DataInbox>,
+    adapter_tasks: JoinSet<()>,
+    adapter_attached: bool,
+    adapter_state: AdapterState,
+    snapshots: HashMap<DeviceId, PendingSnapshot>,
     backend: Arc<dyn BleBackend>,
-    event_tx: mpsc::Sender<BleEvent>,
+    outbox: Arc<EventOutbox>,
     internal_tx: mpsc::Sender<InternalEvent>,
     initialized: bool,
     initializing: bool,
@@ -237,20 +305,27 @@ struct CoreState {
     scan_control: Arc<ScanControl>,
     options: CoreOptions,
     adapter_generation: u64,
+    work_generation: u64,
 }
 
 async fn run_core(
     backend: Arc<dyn BleBackend>,
     mut command_rx: mpsc::Receiver<CoreCommand>,
-    event_tx: mpsc::Sender<BleEvent>,
+    outbox: Arc<EventOutbox>,
     scan_control: Arc<ScanControl>,
     shutdown: CancellationToken,
     options: CoreOptions,
 ) {
     let (internal_tx, mut internal_rx) = mpsc::channel(INTERNAL_CHANNEL_CAPACITY);
+    let data = Arc::new(DataInbox::default());
     let mut state = CoreState {
+        data: data.clone(),
+        adapter_tasks: JoinSet::new(),
+        adapter_attached: false,
+        adapter_state: AdapterState::Unknown,
+        snapshots: HashMap::new(),
         backend,
-        event_tx,
+        outbox,
         internal_tx,
         initialized: false,
         initializing: false,
@@ -262,6 +337,7 @@ async fn run_core(
         scan_control: scan_control.clone(),
         options,
         adapter_generation: 0,
+        work_generation: 0,
     };
     let mut tasks = JoinSet::new();
     loop {
@@ -291,6 +367,8 @@ async fn run_core(
                     state.handle_internal(internal, &mut tasks).await;
                 }
             }
+            event = data.recv() => state.handle_internal(event, &mut tasks).await,
+            _ = state.adapter_tasks.join_next(), if !state.adapter_tasks.is_empty() => {},
             result = tasks.join_next(), if !tasks.is_empty() => {
                 if let Some(Err(error)) = result {
                     eprintln!("[GDBLE] Background task failed: {error}");
@@ -349,6 +427,41 @@ impl CoreState {
             .await;
             return;
         }
+        if let Err(error) = self.outbox.reserve_signal(SignalKey::Adapter) {
+            self.emit(BleEvent::failed(
+                Operation::Initialize,
+                operation_id,
+                EventContext::default(),
+                error,
+            ))
+            .await;
+            return;
+        }
+        if self.adapter_attached {
+            if self.adapter_state == AdapterState::PoweredOn {
+                self.data.discard_advertisements();
+                self.initialized = true;
+                self.emit(BleEvent::succeeded(
+                    Operation::Initialize,
+                    operation_id,
+                    EventContext::default(),
+                    self.adapter_info
+                        .clone()
+                        .map(EventData::Adapter)
+                        .unwrap_or_default(),
+                ))
+                .await;
+            } else {
+                self.emit(BleEvent::failed(
+                    Operation::Initialize,
+                    operation_id,
+                    EventContext::default(),
+                    BleError::AdapterUnavailable(self.adapter_state.as_str().into()),
+                ))
+                .await;
+            }
+            return;
+        }
         self.initializing = true;
         self.emit(BleEvent::started(
             Operation::Initialize,
@@ -360,7 +473,12 @@ impl CoreState {
         let internal_tx = self.internal_tx.clone();
         let deadline = self.options.operation_timeout;
         tasks.spawn(async move {
-            let result = guarded("initialize", deadline, backend.initialize()).await;
+            let result = guarded("initialize", deadline, async {
+                let (info, stream) = backend.initialize().await?;
+                let state = backend.adapter_state().await?;
+                Ok((info, state, stream))
+            })
+            .await;
             let _ = internal_tx
                 .send(InternalEvent::Initialized {
                     operation_id,
@@ -400,6 +518,17 @@ impl CoreState {
                 return;
             }
         };
+        if let Err(error) = self.outbox.reserve_signal(SignalKey::Scan) {
+            let _ = self.scan.tracker.finish(generation);
+            self.emit(BleEvent::failed(
+                Operation::Scan,
+                operation_id,
+                EventContext::default(),
+                error,
+            ))
+            .await;
+            return;
+        }
         self.scan.status = ScanStatus::Starting;
         self.scan.stop_requested = cancellation.is_cancelled();
         self.scan.cancellation = Some(cancellation);
@@ -498,8 +627,12 @@ impl CoreState {
 
     async fn start_next_device_action(&mut self, device: &DeviceId, tasks: &mut JoinSet<()>) {
         loop {
+            self.start_notification_cleanup(device, tasks);
             let Some(queued) = self.devices.get_mut(device).and_then(|session| {
-                if session.in_flight.is_some() {
+                if session.in_flight.is_some()
+                    || session.checking_connection
+                    || session.notification_cleanup
+                {
                     None
                 } else {
                     session.pending.pop_front()
@@ -509,11 +642,6 @@ impl CoreState {
             };
             let operation_id = queued.operation_id;
             let action = queued.action;
-            let restart_notification_pump = matches!(&action, DeviceAction::Subscribe(key) if {
-                let session = self.devices.get(device).expect("device session must exist");
-                session.subscriptions.contains(key)
-                    && session.notification_cancellation.is_none()
-            });
             if let Some(result) = self.validate_device_action(device, &action) {
                 match result {
                     Ok(data) => {
@@ -535,16 +663,69 @@ impl CoreState {
                         .await;
                     }
                 }
-                if restart_notification_pump {
-                    self.ensure_notification_pump(device, tasks).await;
-                }
                 continue;
             }
 
+            if matches!(action, DeviceAction::Connect) {
+                if let Err(error) = self
+                    .outbox
+                    .reserve_signal(SignalKey::Device(device.clone()))
+                {
+                    self.emit(BleEvent::failed(
+                        action.operation(),
+                        operation_id,
+                        action.context(device),
+                        error,
+                    ))
+                    .await;
+                    continue;
+                }
+            }
+            if matches!(action, DeviceAction::Subscribe(_))
+                && !self.devices[device].notification_ready
+            {
+                match self.ensure_notification_pump(device, tasks).await {
+                    Ok(()) => {
+                        self.devices
+                            .get_mut(device)
+                            .unwrap()
+                            .pending
+                            .push_front(QueuedOperation {
+                                operation_id,
+                                action,
+                            });
+                        return;
+                    }
+                    Err(error) => {
+                        self.emit(BleEvent::failed(
+                            action.operation(),
+                            operation_id,
+                            action.context(device),
+                            error,
+                        ))
+                        .await;
+                        continue;
+                    }
+                }
+            }
             let session = self
                 .devices
                 .get_mut(device)
                 .expect("device session must exist");
+            if matches!(action, DeviceAction::Connect | DeviceAction::Disconnect) {
+                session.connection_epoch = session.connection_epoch.wrapping_add(1);
+            }
+            if matches!(action, DeviceAction::Disconnect) {
+                session.local_disconnect_observed = false;
+            }
+            if let DeviceAction::Subscribe(key) = &action {
+                session.subscribing = Some(key.clone());
+                session
+                    .notification_routes
+                    .lock()
+                    .unwrap()
+                    .insert(key.characteristic_uuid().into(), operation_id);
+            }
             session.generation = session.generation.wrapping_add(1);
             let generation = session.generation;
             session.state = match &action {
@@ -609,9 +790,17 @@ impl CoreState {
         {
             return Some(Err(BleError::NotConnected));
         }
+        if session.services_invalidated
+            && !matches!(
+                action,
+                DeviceAction::Connect | DeviceAction::Disconnect | DeviceAction::DiscoverServices
+            )
+        {
+            return Some(Err(BleError::ServicesChanged));
+        }
         if let DeviceAction::Subscribe(key) = &action {
             let subscriptions = &session.subscriptions;
-            if subscriptions.contains(key) {
+            if subscriptions.contains(key) && session.notification_ready {
                 return Some(Ok(EventData::Reason("already_subscribed".to_string())));
             }
             if subscriptions.iter().any(|existing| {
@@ -628,12 +817,47 @@ impl CoreState {
 
     async fn handle_internal(&mut self, event: InternalEvent, tasks: &mut JoinSet<()>) {
         match event {
+            InternalEvent::Snapshot {
+                device,
+                generation,
+                result,
+            } => self.snapshot_completed(device, generation, result).await,
+            InternalEvent::DataOverflow { generation } => {
+                if self.adapter_generation == generation {
+                    self.scan_overflow("internal_advertisements").await;
+                }
+            }
+            InternalEvent::ConnectionChecked {
+                device,
+                epoch,
+                result,
+            } => self.connection_checked(device, epoch, result, tasks).await,
+            InternalEvent::NotificationReady { device, generation } => {
+                if let Some(session) = self.devices.get_mut(&device) {
+                    if session.notification_generation == generation
+                        && session.notification_cancellation.is_some()
+                    {
+                        session.notification_ready = true;
+                        self.start_next_device_action(&device, tasks).await;
+                    }
+                }
+            }
+            InternalEvent::NotificationCleanup { device, epoch } => {
+                if let Some(session) = self.devices.get_mut(&device) {
+                    if session.connection_epoch == epoch {
+                        session.notification_cleanup = false;
+                        session.cleanup_running = false;
+                        self.start_next_device_action(&device, tasks).await;
+                    }
+                }
+            }
+
             InternalEvent::Initialized {
                 operation_id,
                 result,
             } => self.initialized(operation_id, result, tasks).await,
             InternalEvent::Backend { generation, result } => {
-                if self.initialized && generation == self.adapter_generation {
+                if self.adapter_attached && generation == self.adapter_generation {
                     self.backend_event(result, tasks).await;
                 }
             }
@@ -677,26 +901,33 @@ impl CoreState {
             InternalEvent::Notification {
                 device,
                 generation,
+                route,
                 notification,
             } => {
-                self.notification(device, generation, notification).await;
+                self.notification(device, generation, route, notification, tasks)
+                    .await;
             }
             InternalEvent::NotificationPumpFailed {
                 device,
                 generation,
                 error,
             } => {
-                if self.finish_notification_pump(&device, generation) {
-                    self.notification_failure(&device, error).await;
+                if self.devices.get(&device).is_some_and(|s| {
+                    s.notification_generation == generation && s.notification_cancellation.is_some()
+                }) {
+                    self.stop_notifications(&device, error, tasks).await;
                 }
             }
             InternalEvent::NotificationPumpEnded { device, generation } => {
-                if self.finish_notification_pump(&device, generation) {
-                    self.notification_failure(
+                if self.devices.get(&device).is_some_and(|s| {
+                    s.notification_generation == generation && s.notification_cancellation.is_some()
+                }) {
+                    self.stop_notifications(
                         &device,
                         BleError::OperationFailed(
                             "notification stream ended; subscribe again to restart it".to_string(),
                         ),
+                        tasks,
                     )
                     .await;
                 }
@@ -707,26 +938,39 @@ impl CoreState {
     async fn initialized(
         &mut self,
         operation_id: OperationId,
-        result: Result<(AdapterInfo, BackendEventStream), BleError>,
-        tasks: &mut JoinSet<()>,
+        result: Result<(AdapterInfo, AdapterState, BackendEventStream), BleError>,
+        _tasks: &mut JoinSet<()>,
     ) {
         self.initializing = false;
         match result {
-            Ok((adapter_info, mut stream)) => {
-                self.initialized = true;
+            Ok((adapter_info, availability, mut stream)) => {
+                self.adapter_attached = true;
+                self.adapter_state = availability;
+                self.initialized = self.adapter_state == AdapterState::PoweredOn;
                 self.adapter_info = Some(adapter_info.clone());
-                self.emit(BleEvent::succeeded(
-                    Operation::Initialize,
-                    operation_id,
-                    EventContext::default(),
-                    EventData::Adapter(adapter_info),
-                ))
-                .await;
+                if self.initialized {
+                    self.emit(BleEvent::succeeded(
+                        Operation::Initialize,
+                        operation_id,
+                        EventContext::default(),
+                        EventData::Adapter(adapter_info),
+                    ))
+                    .await;
+                } else {
+                    self.emit(BleEvent::failed(
+                        Operation::Initialize,
+                        operation_id,
+                        EventContext::default(),
+                        BleError::AdapterUnavailable(self.adapter_state.as_str().into()),
+                    ))
+                    .await;
+                }
                 self.adapter_generation = self.adapter_generation.wrapping_add(1);
                 let generation = self.adapter_generation;
                 let internal_tx = self.internal_tx.clone();
                 let shutdown = self.shutdown.clone();
-                tasks.spawn(async move {
+                let data = self.data.clone();
+                self.adapter_tasks.spawn(async move {
                     loop {
                         let next = tokio::select! {
                             () = shutdown.cancelled() => return,
@@ -734,11 +978,21 @@ impl CoreState {
                         };
                         let error = match next {
                             Ok(Some(result)) => {
-                                if internal_tx
-                                    .send(InternalEvent::Backend { generation, result })
-                                    .await
-                                    .is_err()
-                                {
+                                let is_data = matches!(
+                                    &result,
+                                    Ok(BackendEvent::Changed { .. } | BackendEvent::Discovered(_))
+                                );
+                                let event = InternalEvent::Backend { generation, result };
+                                if is_data {
+                                    if data.push(event).unwrap_or(false)
+                                        && internal_tx
+                                            .send(InternalEvent::DataOverflow { generation })
+                                            .await
+                                            .is_err()
+                                    {
+                                        return;
+                                    }
+                                } else if internal_tx.send(event).await.is_err() {
                                     return;
                                 }
                                 continue;
@@ -764,7 +1018,8 @@ impl CoreState {
                     EventContext::default(),
                     error,
                 ))
-                .await
+                .await;
+                self.outbox.retire_signal(&SignalKey::Adapter);
             }
         }
     }
@@ -868,26 +1123,27 @@ impl CoreState {
         tasks: &mut JoinSet<()>,
     ) {
         match result {
+            Ok(BackendEvent::Changed { device, update }) => {
+                self.advertisement(device, update, tasks).await
+            }
+            Ok(BackendEvent::StateChanged(state)) => self.adapter_changed(state, tasks).await,
+            Ok(BackendEvent::ServicesChanged(device)) => self.services_changed(device, tasks).await,
+
             Ok(BackendEvent::Discovered(info)) => self.device_progress(info).await,
-            Ok(BackendEvent::Updated(info)) => self.device_progress(info).await,
             Ok(BackendEvent::Disconnected(device)) => self.remote_disconnect(device, tasks).await,
             Err(error) => {
-                let operation_id = self
-                    .scan
-                    .tracker
-                    .active()
-                    .map(|active| active.operation_id)
-                    .unwrap_or(OperationId::UNSOLICITED);
                 self.emit(BleEvent {
                     operation: Operation::Scan,
                     phase: Phase::Failed,
-                    operation_id,
+                    operation_id: OperationId::UNSOLICITED,
                     terminal: false,
                     context: EventContext::default(),
                     data: EventData::None,
                     error: Some(error.into()),
                     connection_state: None,
                     adapter_initialized: None,
+                    notification_generation: None,
+                    discovery_generation: None,
                 })
                 .await;
             }
@@ -895,6 +1151,9 @@ impl CoreState {
     }
 
     async fn device_progress(&mut self, info: DeviceInfo) {
+        if !self.initialized {
+            return;
+        }
         let Ok(device) = DeviceId::parse(&info.address) else {
             return;
         };
@@ -911,19 +1170,33 @@ impl CoreState {
             .active()
             .map(|active| active.operation_id)
             .unwrap_or(OperationId::UNSOLICITED);
-        self.emit(BleEvent::progress(
-            operation_id,
-            context,
-            EventData::Device { kind, info },
-        ))
-        .await;
+        let mut event = BleEvent::progress(operation_id, context, EventData::Device { kind, info });
+        event.discovery_generation = Some(self.work_generation);
+        if let Ok(device) = DeviceId::parse(&event.context.device_address) {
+            event.connection_state = self.devices.get(&device).map(|session| session.state);
+        }
+        if self.outbox.scan(event) {
+            self.scan_overflow("outbound_scan").await;
+        }
     }
 
-    async fn remote_disconnect(&mut self, device: DeviceId, _tasks: &mut JoinSet<()>) {
+    async fn invalidate_device(&mut self, device: DeviceId, _tasks: &mut JoinSet<()>) {
         let mut cancelled = None;
         let mut cancelled_pending = Vec::new();
         if let Some(session) = self.devices.get_mut(&device) {
             session.state = ConnectionState::Disconnected;
+            session.connection_epoch = session.connection_epoch.wrapping_add(1);
+            session.checking_connection = false;
+            session.suspect_disconnect = false;
+            session.connection_completion = None;
+            session.notification_ready = false;
+            session.notification_cleanup = false;
+            session.cleanup_running = false;
+            session.cleanup_keys.clear();
+            session.subscribing = None;
+            session.notification_routes.lock().unwrap().clear();
+            session.notification_buffer.clear();
+            session.notification_buffer_bytes = 0;
             session.generation = session.generation.wrapping_add(1);
             if let Some(in_flight) = session.in_flight.take() {
                 in_flight.abort_handle.abort();
@@ -941,6 +1214,13 @@ impl CoreState {
             session.services.clear();
             cancelled_pending.extend(session.pending.drain(..));
         }
+        if let Some(session) = self.devices.get(&device) {
+            self.outbox
+                .notification_epoch(&device, session.notification_generation);
+        }
+        self.data.discard_notifications(&device);
+        self.outbox
+            .retire_signal(&SignalKey::Notification(device.clone()));
         if let Some((operation, operation_id, context)) = cancelled {
             self.emit(BleEvent::failed(
                 operation,
@@ -965,6 +1245,7 @@ impl CoreState {
             EventData::Reason("remote".to_string()),
         ))
         .await;
+        self.outbox.retire_signal(&SignalKey::Device(device));
     }
 
     async fn device_completed(
@@ -978,188 +1259,121 @@ impl CoreState {
     ) {
         let operation = action.operation();
         let context = action.context(&device);
-        let mut start_notification_pump = false;
+        let Some(session) = self.devices.get_mut(&device) else {
+            return;
+        };
+        if !session
+            .in_flight
+            .as_ref()
+            .is_some_and(|op| op.operation_id == operation_id && op.generation == generation)
+        {
+            return;
+        }
+        if matches!(action, DeviceAction::Connect) && result.is_ok() && session.suspect_disconnect {
+            session.connection_completion = Some((operation_id, action, result));
+            self.check_connection(&device, tasks);
+            return;
+        }
+        let result =
+            if matches!(action, DeviceAction::Disconnect) && session.local_disconnect_observed {
+                Ok(EventData::None)
+            } else {
+                result
+            };
+        session.in_flight = None;
+        let mut buffered = VecDeque::new();
         let event = match result {
             Ok(data) => {
-                {
-                    let Some(session) = self.devices.get_mut(&device) else {
-                        return;
-                    };
-                    let matches_current = session.in_flight.as_ref().is_some_and(|in_flight| {
-                        in_flight.operation_id == operation_id && in_flight.generation == generation
-                    });
-                    if !matches_current {
-                        return;
+                match &action {
+                    DeviceAction::Connect => {
+                        session.state = ConnectionState::Connected;
+                        session.services_invalidated = false;
                     }
-                    session.in_flight = None;
-                    match &action {
-                        DeviceAction::Connect => session.state = ConnectionState::Connected,
-                        DeviceAction::Disconnect => {
-                            session.state = ConnectionState::Disconnected;
-                            if let Some(cancellation) = session.notification_cancellation.take() {
-                                cancellation.cancel();
-                            }
-                            session.notification_generation =
-                                session.notification_generation.wrapping_add(1);
-                            session.subscriptions.clear();
-                            session.services.clear();
+                    DeviceAction::Disconnect => {
+                        session.state = ConnectionState::Disconnected;
+                        session.has_local_disconnect = true;
+                        session.notification_ready = false;
+                        session.subscribing = None;
+                        session.notification_routes.lock().unwrap().clear();
+                        session.notification_buffer.clear();
+                        session.notification_buffer_bytes = 0;
+                        if let Some(cancellation) = session.notification_cancellation.take() {
+                            cancellation.cancel();
                         }
-                        DeviceAction::DiscoverServices => {
-                            if let EventData::Services(services) = &data {
-                                session.services = services.clone();
-                            }
-                        }
-                        DeviceAction::Subscribe(key) => {
-                            session.subscriptions.insert(key.clone());
-                            start_notification_pump = true;
-                        }
-                        DeviceAction::Unsubscribe(key) => {
-                            session.subscriptions.remove(key);
-                        }
-                        DeviceAction::Read(_) | DeviceAction::Write { .. } => {}
+                        session.notification_generation =
+                            session.notification_generation.wrapping_add(1);
+                        session.subscriptions.clear();
+                        session.services.clear();
                     }
+                    DeviceAction::DiscoverServices => {
+                        if let EventData::Services(services) = &data {
+                            session.services = services.clone();
+                            session.services_invalidated = false;
+                        }
+                    }
+                    DeviceAction::Subscribe(key) => {
+                        session.subscriptions.insert(key.clone());
+                        session.subscribing = None;
+                        buffered = std::mem::take(&mut session.notification_buffer);
+                        session.notification_buffer_bytes = 0;
+                    }
+                    DeviceAction::Unsubscribe(key) => {
+                        session.subscriptions.remove(key);
+                        session
+                            .notification_routes
+                            .lock()
+                            .unwrap()
+                            .remove(key.characteristic_uuid());
+                    }
+                    DeviceAction::Read(_) | DeviceAction::Write { .. } => {}
                 }
                 BleEvent::succeeded(operation, operation_id, context, data)
             }
             Err(error) => {
-                {
-                    let Some(session) = self.devices.get_mut(&device) else {
-                        return;
-                    };
-                    let matches_current = session.in_flight.as_ref().is_some_and(|in_flight| {
-                        in_flight.operation_id == operation_id && in_flight.generation == generation
-                    });
-                    if !matches_current {
-                        return;
+                match &action {
+                    DeviceAction::Connect => {
+                        session.state = ConnectionState::Disconnected;
+                        session.suspect_disconnect = false;
                     }
-                    session.in_flight = None;
-                    match &action {
-                        DeviceAction::Connect => session.state = ConnectionState::Disconnected,
-                        DeviceAction::Disconnect => session.state = ConnectionState::Connected,
-                        _ => {}
+                    DeviceAction::Disconnect => session.state = ConnectionState::Connected,
+                    DeviceAction::Subscribe(key) => {
+                        session.subscribing = None;
+                        session
+                            .notification_routes
+                            .lock()
+                            .unwrap()
+                            .remove(key.characteristic_uuid());
+                        session.notification_buffer.clear();
+                        session.notification_buffer_bytes = 0;
                     }
+                    _ => {}
                 }
                 BleEvent::failed(operation, operation_id, context, error)
             }
         };
         self.emit(event).await;
-        if start_notification_pump {
-            self.ensure_notification_pump(&device, tasks).await;
+        let session = &self.devices[&device];
+        let notification_generation = session.notification_generation;
+        self.outbox
+            .notification_epoch(&device, notification_generation);
+        if session.state == ConnectionState::Disconnected {
+            self.outbox
+                .retire_signal(&SignalKey::Device(device.clone()));
+            self.outbox
+                .retire_signal(&SignalKey::Notification(device.clone()));
         }
+        for notification in buffered {
+            self.notification(
+                device.clone(),
+                notification_generation,
+                Some(operation_id),
+                notification,
+                tasks,
+            )
+            .await;
+        }
+        self.start_notification_cleanup(&device, tasks);
         self.start_next_device_action(&device, tasks).await;
-    }
-
-    async fn ensure_notification_pump(&mut self, device: &DeviceId, tasks: &mut JoinSet<()>) {
-        let Some(session) = self.devices.get_mut(device) else {
-            return;
-        };
-        if session.subscriptions.is_empty() || session.notification_cancellation.is_some() {
-            return;
-        }
-        session.notification_generation = session.notification_generation.wrapping_add(1);
-        let generation = session.notification_generation;
-        let cancellation = CancellationToken::new();
-        session.notification_cancellation = Some(cancellation.clone());
-        let backend = self.backend.clone();
-        let internal_tx = self.internal_tx.clone();
-        let device = device.clone();
-        let deadline = self.options.operation_timeout;
-        tasks.spawn(async move {
-            let mut stream =
-                match guarded("notifications", deadline, backend.notifications(&device)).await {
-                    Ok(stream) => stream,
-                    Err(error) => {
-                        let _ = internal_tx
-                            .send(InternalEvent::NotificationPumpFailed {
-                                device,
-                                generation,
-                                error,
-                            })
-                            .await;
-                        return;
-                    }
-                };
-            loop {
-                let next = tokio::select! {
-                    () = cancellation.cancelled() => return,
-                    next = AssertUnwindSafe(stream.next()).catch_unwind() => next,
-                };
-                let event = match next {
-                    Ok(Some(Ok(notification))) => InternalEvent::Notification {
-                        device: device.clone(),
-                        generation,
-                        notification,
-                    },
-                    Ok(Some(Err(error))) => InternalEvent::NotificationPumpFailed {
-                        device: device.clone(),
-                        generation,
-                        error,
-                    },
-                    Err(_) => InternalEvent::NotificationPumpFailed {
-                        device: device.clone(),
-                        generation,
-                        error: BleError::InternalError("notification stream panicked".to_string()),
-                    },
-                    Ok(None) => InternalEvent::NotificationPumpEnded {
-                        device: device.clone(),
-                        generation,
-                    },
-                };
-                let ended = !matches!(event, InternalEvent::Notification { .. });
-                if internal_tx.send(event).await.is_err() || ended {
-                    return;
-                }
-            }
-        });
-    }
-
-    fn finish_notification_pump(&mut self, device: &DeviceId, generation: u64) -> bool {
-        self.devices.get_mut(device).is_some_and(|session| {
-            session.notification_generation == generation
-                && session.notification_cancellation.take().is_some()
-        })
-    }
-
-    async fn notification_failure(&self, device: &DeviceId, error: BleError) {
-        let mut event = BleEvent::failed(
-            Operation::Notification,
-            OperationId::UNSOLICITED,
-            EventContext::for_device(device),
-            error,
-        );
-        event.terminal = false;
-        self.emit(event).await;
-    }
-
-    async fn notification(
-        &mut self,
-        device: DeviceId,
-        generation: u64,
-        notification: BackendNotification,
-    ) {
-        let Some(session) = self.devices.get(&device) else {
-            return;
-        };
-        if session.notification_generation != generation
-            || session.state != ConnectionState::Connected
-            || session.notification_cancellation.is_none()
-        {
-            return;
-        }
-        let characteristic_uuid = notification.characteristic_uuid.to_ascii_lowercase();
-        let Some(key) = session
-            .subscriptions
-            .iter()
-            .find(|key| key.characteristic_uuid() == characteristic_uuid)
-        else {
-            return;
-        };
-        let event = BleEvent::received(
-            Operation::Notification,
-            EventContext::for_gatt(&device, key),
-            EventData::Bytes(notification.value),
-        );
-        self.emit(event).await;
     }
 
     async fn adapter_stream_ended(
@@ -1168,12 +1382,35 @@ impl CoreState {
         error: BleError,
         tasks: &mut JoinSet<()>,
     ) {
-        if generation != self.adapter_generation || !self.initialized {
+        if generation != self.adapter_generation || !self.adapter_attached {
             return;
         }
+        self.invalidate_adapter(error, true, tasks).await;
+    }
+
+    async fn invalidate_adapter(&mut self, error: BleError, ended: bool, tasks: &mut JoinSet<()>) {
+        self.work_generation = self.work_generation.wrapping_add(1);
+        self.outbox.discovery_epoch(self.work_generation);
+        self.data.discard_advertisements();
+        self.snapshots.clear();
+        if ended {
+            self.adapter_attached = false;
+            self.adapter_state = AdapterState::Unknown;
+            self.adapter_tasks.abort_all();
+        }
         self.initialized = false;
-        self.adapter_info = None;
+        if ended {
+            self.adapter_info = None;
+        }
         self.known_devices.clear();
+        let mut event = BleEvent::failed(
+            Operation::Initialize,
+            OperationId::UNSOLICITED,
+            EventContext::default(),
+            error,
+        );
+        event.terminal = false;
+        self.emit(event).await;
         let active_scan = self.scan.tracker.active();
         let connected_devices = self.cleanup_devices();
         tasks.abort_all();
@@ -1197,19 +1434,12 @@ impl CoreState {
         }
         let devices: Vec<_> = self.devices.keys().cloned().collect();
         for device in devices {
-            self.remote_disconnect(device, tasks).await;
+            self.invalidate_device(device, tasks).await;
         }
-        let mut event = BleEvent::failed(
-            Operation::Initialize,
-            OperationId::UNSOLICITED,
-            EventContext::default(),
-            error,
-        );
-        event.terminal = false;
-        self.emit(event).await;
     }
 
     async fn shutdown(&mut self, tasks: &mut JoinSet<()>) {
+        self.adapter_tasks.abort_all();
         let scan_active = self.scan.tracker.active().is_some();
         let devices = self.cleanup_devices();
         if let Some(token) = self.scan.cancellation.take() {
@@ -1225,7 +1455,12 @@ impl CoreState {
             session.pending.clear();
         }
         tasks.abort_all();
-        self.cleanup_backend(tasks, scan_active, &devices).await;
+        let budget = self.options.shutdown_timeout;
+        let _ = tokio::time::timeout(budget, async {
+            while self.adapter_tasks.join_next().await.is_some() {}
+            self.cleanup_backend(tasks, scan_active, &devices).await;
+        })
+        .await;
     }
 
     fn cleanup_devices(&self) -> Vec<DeviceId> {
@@ -1268,13 +1503,32 @@ impl CoreState {
         }
         if event.operation == Operation::Scan && event.terminal {
             self.scan_control.finish(event.operation_id);
+            if self.scan.tracker.active().is_none() {
+                self.outbox.retire_signal(&SignalKey::Scan);
+            }
         }
         if let Ok(device) = DeviceId::parse(&event.context.device_address) {
             event.connection_state = self.devices.get(&device).map(|session| session.state);
         }
-        tokio::select! {
-            result = self.event_tx.send(event) => { let _ = result; }
-            () = self.shutdown.cancelled() => {}
+        if event.operation_id != OperationId::UNSOLICITED
+            && (event.terminal || event.phase == Phase::Started)
+        {
+            self.outbox.request(event);
+        } else {
+            let key = match event.operation {
+                Operation::Initialize => SignalKey::Adapter,
+                Operation::Scan if self.scan.tracker.active().is_some() => SignalKey::Scan,
+                Operation::Scan => SignalKey::Adapter,
+                Operation::Notification => match DeviceId::parse(&event.context.device_address) {
+                    Ok(device) => SignalKey::Notification(device),
+                    Err(_) => return,
+                },
+                _ => match DeviceId::parse(&event.context.device_address) {
+                    Ok(device) => SignalKey::Device(device),
+                    Err(_) => return,
+                },
+            };
+            self.outbox.notice(&key, event);
         }
     }
 }
@@ -1316,3 +1570,6 @@ mod tests;
 
 #[cfg(test)]
 mod regression_tests;
+
+#[cfg(test)]
+mod repair_tests;

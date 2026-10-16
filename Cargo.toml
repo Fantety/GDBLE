@@ -3,6 +3,11 @@ name = "gdble"
 version = "0.6.0"
 edition = "2021"
 
+[features]
+default = []
+# Deterministic Godot integration tests only. Never enable in a release package.
+test-harness = []
+
 [dependencies]
 godot = { version = "0.5.2", features = ["api-4-2"] }
 btleplug = "0.12.0"
@@ -15,6 +20,9 @@ uuid = "1.23.1"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.19.0"
+
+[build-dependencies]
+sha2 = "0.10.9"
 
 [lib]
 crate-type = ["cdylib"]

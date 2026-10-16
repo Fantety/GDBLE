@@ -6,7 +6,7 @@ GDBLE releases are two-phase so source, manifests, hashes, and binaries share on
 
 1. Update `Cargo.toml`, `Cargo.lock`, documentation, and `release-notes/v<version>.md` for the target version. Commit the notes before starting the workflow; the tag must include them.
 2. Run the `Prepare release` workflow with the version without a `v` prefix.
-3. The workflow builds all desktop libraries and both Android AARs, replaces the canonical `addons/gdble` artifacts, writes `SHA256SUMS`, rejects stale legacy artifacts, and opens a release PR.
+3. The workflow builds all desktop libraries and both Android AARs, replaces the canonical `addons/gdble` artifacts, writes `BUILD_INFO.json` and `SHA256SUMS`, validates embedded provenance, and smoke-tests the assembled addon on Godot 4.2.2 and 4.6.1 before opening a release PR.
 4. Review CI, artifact contents, and device-test evidence, then merge the PR.
 
 The prepare workflow does not create a tag or GitHub release.
@@ -20,7 +20,11 @@ git tag v0.6.0 <merged-commit>
 git push origin v0.6.0
 ```
 
-The tag workflow only validates hashes/layout, packages the tag contents, and publishes the release. It never writes back to a branch.
+The tag workflow validates provenance/hashes/layout and smoke-tests the exact addon on Windows, Linux, and both macOS architectures with Godot 4.2.2 and 4.6.1 before packaging. It never recompiles the extension or writes back to a branch.
+
+Native build metadata embeds version, source commit, source SHA-256, Rust toolchain, target, and test-harness status. Source hashing covers Cargo inputs, Rust code, Android plugin sources/configuration, and addon manifests/helper, using normalized UTF-8/LF bytes. A release commit can differ from the build commit because adding binaries changes Git history; the source digest must still match. `test-harness` builds are rejected.
+
+Use `python scripts/artifact_provenance.py generate` after replacing all required artifacts, then `python scripts/artifact_provenance.py validate`. `python scripts/test-godot.py --mode artifact` copies the final addon unchanged to an isolated project and does not invoke Cargo. Source and injected-backend tests use `--mode source` and `--mode harness` with separate build directories. `generate --allow-incomplete` can record local progress, but the resulting manifest explicitly fails release validation; it is never a release-ready substitute.
 
 ## Release notes
 

@@ -190,11 +190,21 @@ pub struct EventError {
 
 impl From<BleError> for EventError {
     fn from(error: BleError) -> Self {
+        let mut details = HashMap::new();
+        match &error {
+            BleError::AdapterUnavailable(state) => {
+                details.insert("state".into(), state.clone());
+            }
+            BleError::EventOverflow(source) => {
+                details.insert("source".into(), source.clone());
+            }
+            _ => {}
+        }
         Self {
             code: error.code().to_string(),
             message: error.to_string(),
             retryable: error.is_retryable(),
-            details: HashMap::new(),
+            details,
             legacy_message: error.legacy_message(),
         }
     }
@@ -212,6 +222,9 @@ pub struct BleEvent {
     /// Internal authoritative snapshot; local request rejections leave it absent.
     pub connection_state: Option<ConnectionState>,
     pub adapter_initialized: Option<bool>,
+    /// Internal delivery epoch; never serialized to GDScript.
+    pub notification_generation: Option<u64>,
+    pub discovery_generation: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -238,6 +251,8 @@ impl BleEvent {
             error: None,
             connection_state: None,
             adapter_initialized: None,
+            notification_generation: None,
+            discovery_generation: None,
         }
     }
 
@@ -297,6 +312,8 @@ impl BleEvent {
             error: None,
             connection_state: None,
             adapter_initialized: None,
+            notification_generation: None,
+            discovery_generation: None,
         }
     }
 }

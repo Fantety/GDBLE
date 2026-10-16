@@ -22,14 +22,10 @@ var test_stats = {
 
 # 测试配置
 var test_config = {
-	"enable_stress_test": false,
-	"stress_test_iterations": 3,
-	"auto_disconnect_after_test": false,
-	"disconnect_delay": 5.0
+	"stress_test_iterations": 3
 }
 
 var stress_test_iteration = 0
-var stress_test_timer: float = 0.0
 var is_stress_testing: bool = false
 
 func _ready():
@@ -50,17 +46,14 @@ func _ready():
 	
 	print("Initializing Bluetooth adapter...")
 	bluetooth_manager.set_debug_mode(true)
-	if OS.get_name() == "Android":
-		OS.request_permissions()
-	bluetooth_manager.initialize()
+	var startup = preload("res://addons/gdble/permission_startup.gd").new()
+	add_child(startup)
+	startup.permission_denied.connect(func(missing): print("BLE remains uninitialized. Enable permissions in Settings: ", missing))
+	startup.start(bluetooth_manager)
 
 func _on_ble_event(event: Dictionary):
 	if event.terminal or event.phase == &"received":
 		print("BLE event: ", event)
-
-func _process(delta: float):
-	if is_stress_testing:
-		stress_test_timer += delta
 
 func start_scanning():
 	print("\n=== Starting BLE Scan ===")
@@ -409,7 +402,6 @@ func _input(event: InputEvent):
 		match event.keycode:
 			KEY_F1:
 				print("\n[INPUT] Starting stress test...")
-				test_config.enable_stress_test = true
 				start_stress_test()
 			KEY_F2:
 				print("\n[INPUT] Printing current test stats...")

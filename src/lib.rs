@@ -1,5 +1,9 @@
 use godot::prelude::*;
 
+// Exported data survives linker stripping; package validation reads it without
+// executing the library. No testing methods are compiled into release builds.
+include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
+
 // Module declarations
 mod backend;
 mod ble_characteristic;

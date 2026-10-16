@@ -7,17 +7,17 @@ host_os="$(uname -s)"
 host_arch="$(uname -m)"
 
 cd "$repo_root"
-cargo build --release --locked
+cargo build --release --locked --target-dir target/desktop-build
 
 case "$host_os/$host_arch" in
     Linux/x86_64)
-        cp target/release/libgdble.so "$addon/libgdble.linux.x86_64.so"
+        cp target/desktop-build/release/libgdble.so "$addon/libgdble.linux.x86_64.so"
         ;;
     Darwin/x86_64)
-        cp target/release/libgdble.dylib "$addon/libgdble.macos.x86_64.dylib"
+        cp target/desktop-build/release/libgdble.dylib "$addon/libgdble.macos.x86_64.dylib"
         ;;
     Darwin/arm64)
-        cp target/release/libgdble.dylib "$addon/libgdble.macos.arm64.dylib"
+        cp target/desktop-build/release/libgdble.dylib "$addon/libgdble.macos.arm64.dylib"
         ;;
     *)
         echo "Unsupported host platform: $host_os/$host_arch" >&2

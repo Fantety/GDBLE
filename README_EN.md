@@ -44,6 +44,8 @@
 
 **Current version: 0.6.0 · Godot 4.2+**
 
+See the [repair validation record](docs/REPAIR_VALIDATION.md) for completed checks and outstanding release acceptance. Release requires matching source provenance, final-addon smoke tests, and device evidence. `release_ready = false` in `BUILD_INFO.json` means the artifact set is incomplete.
+
 A Rust BLE GDExtension for Godot 4.2+, built on btleplug 0.12.0. It supports scanning, connections, GATT discovery, reads, writes, and notifications while preserving the 0.5.x class names, method parameters, and legacy signals.
 
 **Plugin Page**: [GDBLE - Godot Asset Library](https://godotengine.org/asset-library/asset/3439)
@@ -121,6 +123,9 @@ your_project/
     └── gdble/
         ├── gdble.gdextension
         ├── gdble.gdap
+        ├── permission_startup.gd
+        ├── BUILD_INFO.json
+        ├── SHA256SUMS
         ├── libgdble.windows.x86_64.dll
         ├── libgdble.linux.x86_64.so
         ├── libgdble.macos.x86_64.dylib
@@ -137,7 +142,7 @@ The plugin declares but does not request permissions:
 - API 23–30: `BLUETOOTH`, `BLUETOOTH_ADMIN`, `ACCESS_FINE_LOCATION`
 - API 31+: `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`
 
-Call `OS.request_permissions()` before `BluetoothManager.initialize()`. Android is distributed as `gdble-release.aar` plus a separate `btleplug-release.aar`, not raw `.so` files or a fat AAR.
+Check permissions first, then wait for permission callbacks and confirm the complete required set before initializing. Both demos reuse `permission_startup.gd`: denial leaves BLE uninitialized and returning to the foreground rechecks without repeatedly opening dialogs. Android is distributed as `gdble-release.aar` plus a separate `btleplug-release.aar`.
 
 Android export requires Gradle Build, minSdk 23, and compileSdk 34; see the [Android build guide](docs/ANDROID_BUILD.md).
 
@@ -176,10 +181,11 @@ func _ready() -> void:
     bluetooth.device_discovered.connect(_on_discovered)
     bluetooth.ble_event.connect(_on_ble_event)
 
-    if OS.get_name() == "Android":
-        OS.request_permissions()
-
-    print("initialize operation: ", bluetooth.initialize())
+    var startup = preload("res://addons/gdble/permission_startup.gd").new()
+    add_child(startup)
+    startup.permission_denied.connect(func(missing):
+        print("BLE remains uninitialized; enable permissions in Settings: ", missing))
+    startup.start(bluetooth)
 
 func _on_initialized(success: bool, error: String) -> void:
     if success:
@@ -301,9 +307,15 @@ Connect signals before calling methods. Invalid arguments, uninitialized standal
 
 For scan progress events, the DeviceInfo `data` also contains `kind: StringName` with `discovered` or `updated`.
 
-New stable errors include `INVALID_ARGUMENT`, `NOT_INITIALIZED`, `BUSY`, `QUEUE_FULL`, `CANCELLED`, `ANDROID_NOT_INITIALIZED`, and `AMBIGUOUS_CHARACTERISTIC`. Legacy error signals keep their compatibility text.
+New stable errors include `INVALID_ARGUMENT`, `NOT_INITIALIZED`, `BUSY`, `QUEUE_FULL`, `CANCELLED`, `ANDROID_NOT_INITIALIZED`, `AMBIGUOUS_CHARACTERISTIC`, `ADAPTER_UNAVAILABLE`, `EVENT_OVERFLOW`, and `SERVICES_CHANGED`. Legacy error signals keep their compatibility text.
+
+Admission reserves capacity for both started and terminal events. Reservation failure synchronously returns `QUEUE_FULL` without executing backend work. Command capacity remains 64, outbound event capacity 1024, and the per-frame budget 256. Control and high-rate data use separate channels. Congested scan updates coalesce by device and evict the oldest pending update with `EVENT_OVERFLOW`. Non-request failures have `operation_id = 0`, `terminal = false`. Repeated unsolicited state changes may coalesce to the latest state under pressure; request outcomes never coalesce.
 
 Subscriptions use the full `(service_uuid, characteristic_uuid)` key and each device has one notification pump. Since btleplug notifications omit the service UUID, subscribing to the same characteristic UUID under two services fails with `AMBIGUOUS_CHARACTERISTIC`.
+
+The notification receiver is ready before backend subscribe starts. Preparation buffers at most 64 values / 64 KiB per device; subscription success precedes buffered delivery. Any notification overflow reports `EVENT_OVERFLOW` (`error.details.source` identifies the buffer), stops that device's pump, and clears undelivered data while preserving the connection. The application must subscribe again. Notification failures also project to legacy `operation_failed`.
+
+Power-off or unknown adapter state emits a nonterminal `initialize` failure with `ADAPTER_UNAVAILABLE` and `error.details.state` (`powered_off` or `unknown`), invalidates initialization, and cancels scan/device work. Power-on emits `initialize` progress with `data.reason = powered_on`; explicitly initialize again. Service changes report `SERVICES_CHANGED`, clear GATT/subscription caches, and require discovery before resubscribing. No automatic reconnect is performed.
 
 ---
 

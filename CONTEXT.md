@@ -34,6 +34,10 @@ GDBLE exposes Bluetooth Low Energy operations to Godot while keeping all asynchr
 - `src/core.rs`: backend coordination, state machines, deadlines, and tracked task cleanup.
 - `src/core/client.rs`: nonblocking submission, independent scan cancellation, runtime ownership.
 - `src/core/protocol.rs`: IDs, structured events, scan identity, and internal state snapshots.
+- `src/core/outbox.rs`, `src/core/inbox.rs`: admission reservations, bounded state mailboxes, and isolated high-rate data.
+- `src/core/lifecycle.rs`, `src/core/notifications.rs`: connection epochs, adapter availability, snapshots, and notification preparation/recovery.
 - `src/event_cache.rs`: pure main-thread cache projections, tested without Godot.
 - `src/backend/test_support.rs`, `src/core/tests.rs`, `src/core/regression_tests.rs`: deterministic backend, lifecycle, pressure, and failure-injection tests.
 - `release-notes/v<version>.md`: release body read from the tagged commit; see `docs/RELEASING.md`.
+
+ADR 0005 refines session behavior: local disconnect echoes preserve queued reconnects; adapter attachment survives power changes; notification overflow invalidates the pump while preserving connection. Accepted requests reserve their started/terminal slots before enqueue. Unsolicited lifecycle changes may coalesce to the latest state under sustained pressure; request completions never coalesce. See `docs/adr/0005-session-epochs-and-event-reservations.md` for limits and recovery rules.
