@@ -321,7 +321,7 @@ Power-off or unknown adapter state emits a nonterminal `initialize` failure with
 
 ## Complete Examples
 
-See [demo](demo), the [Demo guide](demo/DEMO_GUIDE.md), and the [commented script](demo/bluetooth_test_with_comments.gd) for a runnable project. The following examples assume Bluetooth permissions have been granted. Replace names and UUIDs with those of your device.
+The runnable [demo](demo) now opens a Chinese-language BLE debugger with multiple device connections, arbitrary GATT browsing, HEX/UTF-8 reads and writes, notification subscriptions, and filtered logs. It uses desktop split panes and mobile tabs. Open `demo/project.godot` in Godot 4.2+ and run the project; see the [Demo guide](demo/DEMO_GUIDE.md) for setup and permissions. The original [console example](demo/examples/console.tscn) and [commented example](demo/examples/commented.tscn) remain separate learning entry points. The following code examples assume Bluetooth permissions have been granted. Replace names and UUIDs with those of your device.
 
 ### Example 1: Scan and Connect to Device
 

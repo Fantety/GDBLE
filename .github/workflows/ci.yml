@@ -71,11 +71,12 @@ jobs:
         with:
           version: ${{ matrix.godot }}
           use-dotnet: false
-      - name: Verify source, callback reentry, and permission state machine
+      - name: Verify source, callback reentry, permissions, and debugger UI
         run: |
           python3 scripts/test-godot.py --mode source
           python3 scripts/test-godot.py --mode harness
           python3 scripts/test-godot.py --mode permissions
+          python3 scripts/test-godot.py --mode debugger
 
   android-aar:
     runs-on: ubuntu-latest

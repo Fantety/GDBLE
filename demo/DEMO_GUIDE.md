@@ -1,312 +1,96 @@
-# GDBLE Demo 使用指南
+# GDBLE Demo：多设备 BLE 调试工具
 
-Demo 要求 Godot 4.2+。`demo/addons/gdble` 由根目录构建脚本从 canonical `addons/gdble` 生成；首次运行前请执行 `build.ps1` 或 `build.sh`。
+默认入口是 `res://node_2d.tscn`，使用 Godot 4.2+ 的原生 Control 控件和 Compatibility 渲染器。界面为中文，桌面显示设备、GATT 和日志分栏；宽度小于 760 或高度小于 600 时切换为“设备／调试／日志”分页。当前设备与连接状态始终显示在顶部。
 
-Android 导出使用 Gradle、minSdk 23，并同时打包 GDBLE 与 btleplug 两个 AAR。Demo 会在 `BluetoothManager.initialize()` 前调用 `OS.request_permissions()`。插件不会自行弹出权限框。
+## 准备与启动
 
-两个示例同时监听旧信号和新的 `ble_event(Dictionary)`；异步方法的返回值是可用于关联终止事件的 operation ID，旧代码可以忽略该返回值。
+1. 安装 Godot 4.2+，打开系统蓝牙。
+2. 从项目根目录执行 `./build.sh` 或 `./build.ps1`。`addons/gdble` 是唯一发行源，构建脚本生成 `demo/addons/gdble`；不要单独维护两份插件。
+3. 在 Godot 中打开 `demo/project.godot`，运行项目（F6 运行当前场景，F5 运行默认调试工具）。
+4. 等待顶部显示“蓝牙已就绪”。初始化失败时检查蓝牙开关、驱动和权限，再点击“重试初始化”。
 
-## 文件说明
+主题优先使用系统的微软雅黑或 Noto 字体。Linux 若未安装中文字体，请安装发行版的 Noto CJK 字体包（如 `fonts-noto-cjk`）后重启 Godot。
 
-### bluetooth_test.gd
-基本测试脚本，演示完整的蓝牙操作流程：
-- 扫描设备
-- 连接到 "Fantety11" 设备
-- 订阅 fff1 特征的通知
-- 写入数据到 fff2 特征
+Android 导出需启用 Gradle、minSdk 23，并打包 GDBLE 与 btleplug 两个 AAR，详见 [Android 构建指南](../docs/ANDROID_BUILD.md)。启动复用插件的权限门控：Android 12+ 请求蓝牙扫描、连接权限；Android 6–11 请求定位权限。拒绝后界面显示缺失权限；永久拒绝时先在系统设置授权，再点击重试。返回前台只检查权限，不反复弹出对话框。Android 使用系统 DPI 缩放控件，并支持横竖屏切换。
 
-### bluetooth_test_with_comments.gd
-详细注释版本，包含：
-- 完整的代码注释
-- 清晰的操作流程说明
-- 更友好的输出格式
-- 推荐用于学习和参考
+## 扫描与多设备连接
 
-## 快速开始
+- 点击“开始扫描”，默认扫描 10 秒，可在旁边调整为 1–300 秒，也可以手动停止。
+- 列表显示名称、规范化地址、RSSI 和连接状态；同一设备的新广播原位更新。支持按名称或地址筛选。
+- 选择一台设备后点击“连接设备”。连接成功会自动发现服务。
+- 可以依次连接多台设备。切换列表中的当前设备只切换操作目标，其他设备保持连接；“断开连接”只作用于当前设备。
+- 每台设备独立保存服务、特征选择、发送草稿、编码格式、写入模式、最近数据和订阅状态。
 
-### 1. 准备工作
+连接数量与系统、适配器、外设能力有关，工具没有额外扩展底层 BLE 能力。
 
-确保你的设备：
-- 已开启蓝牙
-- 设备名称为 "Fantety11"（或修改脚本中的目标设备名）
-- 包含 fff0 服务及其特征：
-  - fff1: 用于发送通知（设备 → Godot）
-  - fff2: 用于接收数据（Godot → 设备）
+## 浏览与收发
 
-### 2. 运行测试
+服务树展示实际发现的所有服务与特征，以及读、写、无响应写、通知、指示属性。UUID 保留完整值，窄屏可在树中横向滚动；选择特征后，下方详情会换行展示完整的服务和特征 UUID，并支持选择复制。
 
-1. 在 Godot 中打开 demo 场景
-2. 将测试脚本附加到节点
-3. 运行场景
-4. 观察控制台输出
+选中特征后按需操作，工具不会自动读取、写入或订阅：
 
-### 3. 预期输出
+- **读取**：仅支持读属性时启用。
+- **发送**：选择 HEX 或 UTF-8。HEX 接受空格、制表符和换行，例如 `01 AF 20`；不接受 `0x` 前缀、短横线、非法字符或不完整字节。输入错误直接显示在发送框旁，不会发起请求。UTF-8 按原文编码。
+- **写入模式**：默认优先有响应写入；只支持无响应写入时自动选择该模式。支持两者的特征可以手动切换。
+- **订阅通知／取消订阅**：通知或指示特征可用。只有接口报告成功才改变订阅状态，失败时保留原状态。
 
-```
-=== GDBLE Bluetooth Plugin Test ===
-Initializing Bluetooth adapter...
-✓ Bluetooth adapter initialized
+读取结果、成功发送的数据和通知显示时间、字节数、HEX 与 UTF-8。任意二进制中的非法 UTF-8 会显示为 `�`，零字节显示为 `␀`，HEX 保留实际字节。特征身份包含设备地址、服务 UUID 和特征 UUID，相同 UUID 不会串数据。
 
-=== Starting BLE Device Scan ===
-✓ Scan started
-  Device: Fantety11 (XX:XX:XX:XX:XX:XX) RSSI: -45 dBm
-✓ Scan stopped
+操作期间相关按钮暂时禁用，其他设备可独立操作。手机“调试”页可纵向滚动到发送按钮和最近数据；横屏下所有分页内容均可滚动。
 
-=== Scan Results ===
-  Total devices found: 1
-  ✓ Found target device: Fantety11
+## 日志与恢复
 
-=== Connecting to Device ===
-  Address: XX:XX:XX:XX:XX:XX
-  Device instance created
-  Setting up device signals...
-  Initiating connection...
-✓ Device connected successfully
+日志最多保留最近 2000 条，持续通知不会无限增长。支持“全部设备／当前设备”和“仅错误”组合筛选；“复制”复制当前可见范围的全部文本，“清空”只清除符合当前筛选的条目。选择当前设备范围时不包含适配器的全局日志；查看权限、初始化及扫描错误请选“全部设备”。没有定时发送或文件导出功能。
 
-=== Discovering Services ===
-  Device: Fantety11
-  Address: XX:XX:XX:XX:XX:XX
-  Connected: true
+| 状态 | 恢复方式 |
+| --- | --- |
+| 初始化失败、权限拒绝、蓝牙关闭 | 检查系统状态后点击“重试初始化” |
+| 连接失败或断连 | 日志保留，选择设备后重新连接；连接成功会重新发现服务 |
+| 服务发生变化（SERVICES_CHANGED） | 旧服务和订阅失效，点击“重新发现”，重新选择特征 |
+| 通知流中断／溢出 | 连接保留、订阅清除，重新订阅需要的特征 |
+| 适配器失效 | 所有会话清除连接、GATT、订阅与进行中请求，重试初始化后逐台重连 |
 
-=== Services Discovered ===
-  Total services: 8
+日志与草稿保存在内存中，退出程序后不会保存。
 
-=== Processing fff0 Service ===
-  Service UUID: 0000fff0-0000-1000-8000-00805f9b34fb
-  Characteristics: 3
+## 控制台学习入口
 
-  [fff1] Notification Characteristic
-    UUID: 0000fff1-0000-1000-8000-00805f9b34fb
-    Can Notify: true
-    >>> Subscribing to notifications...
+默认界面不依赖旧测试脚本。仍然可以在 Godot 编辑器中打开并用 F6 单独运行：
 
-  [fff2] Write Characteristic
-    UUID: 0000fff2-0000-1000-8000-00805f9b34fb
-    Can Write: true
-    >>> Writing test data...
+- `res://examples/console.tscn` → `bluetooth_test.gd`：原控制台流程。
+- `res://examples/commented.tscn` → `bluetooth_test_with_comments.gd`：详细注释版。
 
-=== Operation Summary ===
-  ✓ fff0 service found
-  fff1 subscribed: ✓
-  fff2 written: ✓
+这两个旧示例有预设目标设备名和 fff 系列 UUID，运行前应按实际设备修改。它们会自动执行示例中的读写／订阅操作，适合学习接口；默认图形工具支持任意服务与特征，所有收发均由用户发起。
 
->>> Waiting for notifications from fff1...
->>> Any data received will be displayed below
+## 代码与自动验证
 
-=== Characteristic Written ===
-  UUID: 0000fff2-0000-1000-8000-00805f9b34fb
-  ✓ Data successfully written to fff2
+`debugger/` 分工如下：
 
-============================================================
-=== NOTIFICATION RECEIVED ===
-============================================================
-  UUID: 0000fff1-0000-1000-8000-00805f9b34fb
-  Length: 11 bytes
-  Hex: 68656c6c6f206764626c65
-  Text: 'hello gdble'
+| 文件 | 职责 |
+| --- | --- |
+| `session.gd` | 每台设备的会话状态与组合特征身份 |
+| `controller.gd` | 权限启动、Manager／设备事件路由与请求关联 |
+| `device_access.gd` | 将原生设备接口映射为可注入的设备端口 |
+| `codec.gd`、`log_store.gd` | HEX／UTF-8 转换、容错显示和有界日志 |
+| `debugger.gd`、`ui.gd` | 响应式布局与共享主题 |
+| `device_panel.gd`、`gatt_panel.gd`、`log_panel.gd` | 各功能区控件 |
+| `tests/` | 假 Manager／设备与界面回归测试 |
 
-  >>> This notification is from fff1 characteristic! <<<
-  >>> Your device sent this data <<<
-============================================================
+初始化、扫描、设备解析只消费 Manager 事件，设备操作只消费对应设备的 `ble_event`。事件延迟到调用返回后处理，先保存 operation ID，再处理可能同步发出的拒绝事件。界面按 100 ms 合并刷新，数据和日志仍按事件逐条处理。
+
+在根目录运行（可用 `--godot` 指定 Godot 可执行文件）：
+
+```sh
+python scripts/test-godot.py --mode debugger --godot godot
+python scripts/test-godot.py --mode debugger --godot godot --visual-dir target/debugger-screenshots
 ```
 
-## 自定义修改
+默认在隔离临时项目中构建并执行假设备测试，覆盖两台设备、广播更新、草稿保留、编码、写入模式、订阅失败、同步拒绝、断连、服务变化、通知故障、适配器恢复、日志隔离与上限。第二条命令会短暂打开图形窗口，生成 1280×800、360×800、800×360 布局截图。CI 在 Godot 4.2.2／4.6.1 执行界面测试，并保留原有 source、harness 和 permissions 模式。产物验证 artifact 模式仍不会触发 Cargo 构建。
 
-### 修改目标设备
+## 硬件验收清单
 
-在脚本中找到并修改：
+假设备测试和桌面截图不能代替以下实机验收；本次实现未执行这些硬件流程：
 
-```gdscript
-# 原代码
-if name == "Fantety11":
-
-# 改为你的设备名
-if name == "YourDeviceName":
-```
-
-### 修改服务和特征 UUID
-
-```gdscript
-# 在脚本顶部定义
-const YOUR_SERVICE = "your-service-uuid"
-const YOUR_CHAR_NOTIFY = "your-notify-char-uuid"
-const YOUR_CHAR_WRITE = "your-write-char-uuid"
-```
-
-### 修改写入的数据
-
-```gdscript
-# 在 _on_services_discovered 函数中
-write_to_fff2("your custom message")
-```
-
-### 启用调试模式
-
-查看详细的内部日志：
-
-```gdscript
-# 在 _ready() 函数中
-bluetooth_manager.set_debug_mode(true)  # 改为 true
-```
-
-## 常见问题
-
-### Q: 找不到设备？
-**A:** 检查：
-- 设备是否开启并处于广播状态
-- 设备名称是否正确
-- 蓝牙适配器是否启用
-- 设备是否在范围内（10米以内）
-
-### Q: 连接失败？
-**A:** 可能原因：
-- 设备已被其他应用连接
-- 设备需要配对
-- 信号太弱
-- 设备电量不足
-
-### Q: 收不到通知？
-**A:** 检查：
-- 是否成功订阅了特征
-- 特征是否支持通知（Can Notify: true）
-- 设备是否真的发送了数据
-- 启用调试模式查看详细日志
-
-### Q: 写入失败？
-**A:** 检查：
-- 特征是否支持写入
-- 数据格式是否正确
-- 是否已连接到设备
-- 查看 operation_failed 信号的错误信息
-
-## 测试流程图
-
-```
-开始
-  ↓
-初始化蓝牙适配器
-  ↓
-扫描设备 (10秒)
-  ↓
-找到目标设备？
-  ├─ 是 → 连接设备
-  └─ 否 → 结束
-       ↓
-    连接成功？
-       ├─ 是 → 发现服务
-       └─ 否 → 结束
-            ↓
-         找到 fff0 服务？
-            ├─ 是 → 处理特征
-            └─ 否 → 结束
-                 ↓
-              订阅 fff1 通知
-                 ↓
-              写入数据到 fff2
-                 ↓
-              等待通知
-                 ↓
-              收到数据！
-```
-
-## 进阶使用
-
-### 1. 读取特征值
-
-```gdscript
-func read_characteristic_example():
-    if connected_device:
-        connected_device.read_characteristic(
-            FFF0_SERVICE,
-            FFF3_CHARACTERISTIC  # 假设 fff3 支持读取
-        )
-```
-
-### 2. 取消订阅
-
-```gdscript
-func unsubscribe_from_fff1():
-    if connected_device:
-        connected_device.unsubscribe_characteristic(
-            FFF0_SERVICE,
-            FFF1_CHARACTERISTIC
-        )
-```
-
-### 3. 发送二进制数据
-
-```gdscript
-func send_binary_data():
-    var data = PackedByteArray([0x01, 0x02, 0x03, 0x04])
-    connected_device.write_characteristic(
-        FFF0_SERVICE,
-        FFF2_CHARACTERISTIC,
-        data,
-        false  # 无响应写入
-    )
-```
-
-### 4. 处理多种数据格式
-
-```gdscript
-func _on_characteristic_notified(char_uuid: String, data: PackedByteArray):
-    # 尝试解析为文本
-    var text = data.get_string_from_utf8()
-    if text != "":
-        print("Text: ", text)
-        return
-    
-    # 解析为整数
-    if data.size() == 4:
-        var value = data.decode_u32(0)
-        print("Integer: ", value)
-        return
-    
-    # 解析为浮点数
-    if data.size() == 4:
-        var value = data.decode_float(0)
-        print("Float: ", value)
-        return
-    
-    # 其他格式，显示十六进制
-    print("Hex: ", data.hex_encode())
-```
-
-## 性能提示
-
-1. **扫描时间**: 根据需要调整扫描时间，通常 5-10 秒足够
-2. **写入模式**: 对于不需要确认的数据，使用无响应写入（更快）
-3. **通知频率**: 避免设备发送过于频繁的通知（建议 < 100Hz）
-4. **连接管理**: 不使用时及时断开连接，节省电量
-
-## 调试技巧
-
-1. **启用调试模式**:
-   ```gdscript
-   bluetooth_manager.set_debug_mode(true)
-   ```
-
-2. **打印所有服务**:
-   ```gdscript
-   for service in services:
-       print("Service: ", service.get("uuid"))
-       for char in service.get("characteristics", []):
-           print("  Char: ", char.get("uuid"))
-           print("  Props: ", char.get("properties"))
-   ```
-
-3. **使用第三方工具**:
-   - nRF Connect (移动端)
-   - Bluetooth LE Explorer (Windows)
-   - LightBlue (iOS/macOS)
-
-## 支持
-
-如有问题，请：
-1. 查看 README.md 中的完整文档
-2. 启用调试模式查看详细日志
-3. 在 GitHub 提交 Issue
-
----
-
-祝你使用愉快！🎮📱
+- 两台真实外设同时连接、切换目标、分别收发和订阅，长时间通知后检查状态与日志。
+- Android 6–11 与 Android 12+ 的首次授权、部分拒绝、永久拒绝、系统设置授权、返回前台。
+- Android 蓝牙关闭／开启、前后台切换、外设掉电重连、横竖屏、软键盘和真实触屏滚动。
+- 在实际桌面系统与手机上检查驱动、完整 UUID 访问、中文字体和剪贴板。

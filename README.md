@@ -324,7 +324,7 @@ func _on_ble_event(event: Dictionary) -> void:
 
 ## 完整示例
 
-可直接运行的项目见 [demo](demo)，操作步骤见 [Demo 指南](demo/DEMO_GUIDE.md)，另有 [详细注释脚本](demo/bluetooth_test_with_comments.gd)。以下示例假设平台蓝牙权限已授予；设备名和 UUID 请替换为目标设备的值。
+可直接运行的 [demo](demo) 默认打开中文 BLE 调试工具：支持多设备连接、任意 GATT 服务浏览、HEX／UTF-8 收发、通知订阅和日志筛选，桌面分栏、手机分页。用 Godot 4.2+ 打开 `demo/project.godot` 后运行即可；权限和构建步骤见 [Demo 指南](demo/DEMO_GUIDE.md)。原有 [控制台示例](demo/examples/console.tscn) 和 [详细注释示例](demo/examples/commented.tscn) 仍可单独运行。以下代码示例假设平台蓝牙权限已授予；设备名和 UUID 请替换为目标设备的值。
 
 ### 示例 1: 扫描并连接设备
 
