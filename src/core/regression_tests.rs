@@ -134,6 +134,12 @@ fn stalled_device_operations_time_out_and_leave_the_queue_usable() {
         if operation != "connect" {
             success(&mut runtime, client.connect(ADDRESS));
         }
+        if operation == "unsubscribe" {
+            success(
+                &mut runtime,
+                client.subscribe(ADDRESS, SERVICE, CHARACTERISTIC),
+            );
+        }
         backend.fault_next(operation, Fault::Hang);
         let id = device_request(&client, operation).unwrap();
         let failed = wait_for_event(&mut runtime, |event| {
@@ -178,7 +184,7 @@ fn initialize_and_scan_backend_calls_have_deadlines() {
         event.operation_id == id && event.phase == Phase::Started
     });
     backend.fault_next("stop_scan", Fault::Hang);
-    client.stop_scan(id);
+    assert_eq!(client.stop_scan(), id);
     let failed = wait_for_event(&mut runtime, |event| {
         event.operation_id == id && event.terminal
     });

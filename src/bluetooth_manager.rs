@@ -172,7 +172,7 @@ impl BluetoothManager {
 
     #[func]
     pub fn stop_scan(&self) -> i64 {
-        self.client.stop_scan(self.scan.active_id).get()
+        self.client.stop_scan().get()
     }
 
     #[func]

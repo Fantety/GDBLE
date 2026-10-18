@@ -17,7 +17,14 @@ NATIVE = {
     "libgdble.macos.arm64.dylib": "aarch64-apple-darwin",
 }
 AARS = ("android/gdble-release.aar", "android/btleplug-release.aar")
-REQUIRED = {*NATIVE, *AARS, "gdble.gdextension", "gdble.gdap", "permission_startup.gd"}
+REQUIRED = {*NATIVE, *AARS, "gdble.gdextension", "gdble.gdap", "permission_startup.gd", "LICENSE"}
+
+
+def check_license(root: Path, addon: Path) -> None:
+    expected = (root / "LICENSE").read_text(encoding="utf-8")
+    actual = (addon / "LICENSE").read_text(encoding="utf-8")
+    if not expected.strip() or actual != expected:
+        raise ValueError("addon LICENSE must match the repository LICENSE")
 
 
 def source_digest(root: Path) -> str:
@@ -80,6 +87,8 @@ def generate(root: Path, addon: Path, allow_incomplete: bool = False) -> dict:
             data = (addon / name).read_bytes()
             if not data:
                 raise ValueError("empty artifact")
+            if name == "LICENSE":
+                check_license(root, addon)
             info = artifact_info(addon, name)
             check_info(info, digest, version)
             artifacts[name] = {"sha256": hashlib.sha256(data).hexdigest(), "builds": info}
@@ -89,8 +98,10 @@ def generate(root: Path, addon: Path, allow_incomplete: bool = False) -> dict:
         raise ValueError("\n".join(failures))
     report = {"schema": 1, "version": version, "source_sha256": digest,
               "release_ready": not failures, "incomplete": failures, "artifacts": artifacts}
-    (addon / "BUILD_INFO.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (addon / "SHA256SUMS").write_text("".join(f"{hash_value}  {name}\n" for name, hash_value in files(addon).items()), encoding="utf-8")
+    # Match .gitattributes on every host: Git must not change these bytes after
+    # BUILD_INFO.json has been included in the checksum inventory.
+    (addon / "BUILD_INFO.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    (addon / "SHA256SUMS").write_text("".join(f"{hash_value}  {name}\n" for name, hash_value in files(addon).items()), encoding="utf-8", newline="\n")
     return report
 
 
@@ -98,6 +109,7 @@ def validate(root: Path, addon: Path) -> None:
     report = json.loads((addon / "BUILD_INFO.json").read_text(encoding="utf-8"))
     if report.get("schema") != 1 or not report.get("release_ready") or report.get("incomplete"):
         raise ValueError("addon is incomplete; rebuild every required platform before release")
+    check_license(root, addon)
     digest = source_digest(root)
     version = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
     if report["source_sha256"] != digest or report["version"] != version:

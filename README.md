@@ -54,9 +54,9 @@
 
 - ✅ **现代化架构**: 使用 Rust 和异步运行时，性能优异
 - ✅ **实时响应**: 非阻塞操作，后台执行 BLE 请求
-- ✅ **完整功能**: 支持扫描、连接、读写、通知等所有 BLE 操作
+- ✅ **常用 BLE 功能**: 扫描、连接、GATT 发现、读写和通知
 - ✅ **易于使用**: 简洁的 GDScript API，信号驱动的事件系统
-- ✅ **可调试**: 内置调试模式，方便开发和排错
+- ✅ **可调试**: 结构化事件和示例调试工具，便于定位操作失败
 
 ---
 
@@ -84,12 +84,14 @@
 
 ## 平台支持
 
-| 平台 | 架构 | 最低要求 |
-| --- | --- | --- |
-| ✅ Windows | x86_64 | Windows 10 |
-| ✅ Linux | x86_64 | 发行版需提供 BlueZ/DBus |
-| ✅ macOS | x86_64、ARM64 | macOS 10.15 / 11 |
-| ✅ Android | ARM64、x86_64 | API 23，compileSdk 34 |
+| 平台 | 架构 | 最低要求 | 验证范围与发行缺口 |
+| --- | --- | --- | --- |
+| Windows | x86_64 | Windows 10 | 原生构建、Godot 加载及假后端测试；真实 BLE 设备流程需另行验收 |
+| Linux | x86_64 | 发行版需提供 BlueZ/DBus | 构建及 Godot 加载；真实 BlueZ/设备流程需另行验收 |
+| macOS | x86_64、ARM64 | macOS 10.15 / 11 | 源码检查通过；当前历史库待原生重建与加载验收 |
+| Android | ARM64、x86_64 | API 23，compileSdk 34 | 双 ABI 构建及 AAR 结构检查；ARM64 真机 BLE 与 x86_64 模拟器验收待完成 |
+
+上表不代表完整硬件认证。每次修改源码后都必须重新核验产物摘要；最新检查记录见 [修复验收记录](docs/REPAIR_VALIDATION.md)。开发分支的 `addons/gdble` 可能包含待更新产物，不能作为全平台发行包。Asset Library 应绑定已通过发行验收的 tag。
 
 不支持 Android ARMv7、iOS 和自动重连。Android ARM64 用于真机，x86_64 主要用于模拟器加载测试。
 
@@ -124,6 +126,7 @@ your_project/
         ├── gdble.gdextension
         ├── gdble.gdap
         ├── permission_startup.gd
+        ├── LICENSE
         ├── BUILD_INFO.json
         ├── SHA256SUMS
         ├── libgdble.windows.x86_64.dll
@@ -294,7 +297,7 @@ func _on_ble_event(event: Dictionary) -> void:
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `operation` | StringName | `initialize/scan/connect/disconnect/discover_services/read/write/subscribe/unsubscribe/notification` |
+| `operation` | StringName | `initialize/scan/connect/disconnect/discover_services/read/write/subscribe/unsubscribe/notification/resolve_device` |
 | `phase` | StringName | `started/progress/succeeded/failed/cancelled/received` |
 | `operation_id` | int | 调用触发时为正数；远端断开等非请求事件为 `0` |
 | `terminal` | bool | 该 operation ID 是否结束 |
@@ -304,7 +307,7 @@ func _on_ble_event(event: Dictionary) -> void:
 | `data` | Variant | Adapter、DeviceInfo、服务数组、字节或原因文本 |
 | `error` | Dictionary | 固定包含 `code/message/retryable/details` |
 
-原先返回 `void` 的异步方法现在返回可忽略的 operation ID。在 Manager 存活并持续处理事件期间，每个正 ID 恰好有一个终止事件；销毁 Manager 会取消后台工作，不再保证投递剩余事件。`stop_scan()` 返回当前扫描 ID；没有活动扫描时返回 `0`，命令队列满也不会丢失停止请求。
+原先返回 `void` 的异步方法现在返回可忽略的 operation ID。在 Manager 存活并持续处理事件期间，每个正 ID 恰好有一个终止事件；销毁 Manager 会取消后台工作，不再保证投递剩余事件。`stop_scan()` 取消调用时已经提交且尚未结束的扫描（包括等待启动的请求），返回其中最早的扫描 ID；没有未结束的扫描时返回 `0`。它不依赖主线程是否已经处理旧扫描的结束事件，也不占用命令队列；调用之后新提交的扫描不受影响。
 
 请先连接信号，再调用方法。参数错误、独立设备未初始化和命令队列拒绝会在方法返回前同步发出失败事件；不要仅依靠调用返回后才赋值的 ID 来接收这些事件。`BleDevice` 发起的本地拒绝由该设备发出，不会转发到 Manager。已接纳请求通过有界事件队列异步投递，设备事件由 Manager 转发至对应设备。缓存先更新，再发出结构化和旧版信号，回调中的同步 getter 可读取对应状态；请求被拒绝不会改变已有连接状态。
 
@@ -314,11 +317,13 @@ func _on_ble_event(event: Dictionary) -> void:
 
 每个请求接纳前预留开始和终止事件容量，预留失败同步返回 `QUEUE_FULL`，不会执行后端操作。命令容量 64、外发事件容量 1024、每帧最多处理 256 项。控制事件与高频数据分开传递；扫描拥塞时按设备合并并淘汰最旧待发更新，报告 `EVENT_OVERFLOW`。非请求错误统一使用 `operation_id = 0`、`terminal = false`。反复的非请求状态变化在拥塞时可合并为最新状态，请求终止结果不会合并。
 
-同一设备只使用一个 notification pump。订阅身份是完整 `(service_uuid, characteristic_uuid)`；btleplug 通知不携带 service UUID，因此跨服务订阅相同 characteristic UUID 会返回 `AMBIGUOUS_CHARACTERISTIC`。
+同一设备只使用一个 notification pump。订阅身份是完整 `(service_uuid, characteristic_uuid)`；btleplug 通知不携带 service UUID，因此跨服务订阅相同 characteristic UUID 会返回 `AMBIGUOUS_CHARACTERISTIC`。在已连接且 GATT 状态未失效的会话中，取消未订阅的完整 GATT 身份是幂等成功，`data = "already_unsubscribed"`，不会调用后端或影响其他服务的订阅；已订阅身份取消失败时保留原订阅。
 
 通知接收器在后端订阅前准备就绪。订阅期间最多暂存 64 条、64 KiB，成功事件先发出，再按顺序投递数据。任一通知缓冲溢出会发出 `EVENT_OVERFLOW`（`error.details.source` 标明来源），停止该设备通知并清理未交付数据，保持连接；应用需要重新订阅。通知失败同时转发到旧 `operation_failed` 信号。
 
-蓝牙关闭或状态未知时，`initialize` 非终止失败事件返回 `ADAPTER_UNAVAILABLE`，`error.details.state` 为 `powered_off` 或 `unknown`；初始化缓存立即失效，扫描和设备操作被取消。恢复供电时发送 `initialize` progress 提示，`data.reason = powered_on`，应用显式再次初始化。服务变化通过 `SERVICES_CHANGED` 使 GATT 缓存和订阅失效，需要重新发现服务后订阅。不会自动重连。
+蓝牙关闭或状态未知时，`initialize` 非终止失败事件返回 `ADAPTER_UNAVAILABLE`，`error.details.state` 为 `powered_off` 或 `unknown`；初始化缓存立即失效，扫描和设备操作被取消。恢复供电时发送 `initialize` progress 提示，`data` 是字符串 `"powered_on"`，应用显式再次初始化。服务变化通过 `SERVICES_CHANGED` 使 GATT 缓存和订阅失效，需要重新发现服务后订阅。不会自动重连。
+
+各操作的 `data` 类型、完整错误码、请求关联写法和对象生命周期见 [接口契约](docs/API_CONTRACT.md)。
 
 ---
 
@@ -501,7 +506,7 @@ func _on_blue_button_pressed():
 
 ## 调试模式
 
-保留 `set_debug_mode()` / `is_debug_mode()` 兼容接口。诊断操作结果时，建议同时记录 Manager 和设备的 `ble_event`：
+保留 `set_debug_mode()` / `is_debug_mode()` 兼容标志；它不启用额外的原生日志流。诊断操作结果时，可以同时记录 Manager 和设备的 `ble_event`（已接纳设备事件会在两者上出现，汇总时应去重）：
 
 ```gdscript
 bluetooth_manager.set_debug_mode(OS.is_debug_build())
@@ -528,7 +533,7 @@ func _on_ble_event(event: Dictionary):
 1. 确保蓝牙适配器已启用
 2. 确保目标设备处于广播状态
 3. 检查设备是否在范围内（通常 10 米以内）
-4. 启用调试模式查看详细日志
+4. 记录 `ble_event` 或使用 Demo 调试工具查看错误详情
 
 ### Q: 连接设备失败怎么办？
 
@@ -558,7 +563,7 @@ func _on_device_disconnected():
 1. 特征是否支持写入（查看 `properties.write`）
 2. 数据格式是否正确
 3. 是否需要使用 `with_response` 参数
-4. 启用调试模式查看错误信息
+4. 检查 `ble_event.error` 中的错误码和详情
 
 ### Q: 如何找到正确的服务和特征 UUID？
 

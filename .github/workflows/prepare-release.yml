@@ -8,8 +8,11 @@ on:
         required: true
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+
+concurrency:
+  group: prepare-release-${{ inputs.version }}
+  cancel-in-progress: false
 
 jobs:
   validate-release:
@@ -19,7 +22,12 @@ jobs:
       - name: Validate version and release notes
         env:
           VERSION: ${{ inputs.version }}
-        run: python3 scripts/release-notes.py "v$VERSION"
+        run: |
+          if [ "$GITHUB_REF_TYPE" != branch ] || [ "$GITHUB_REF_NAME" = "release/v$VERSION" ]; then
+            echo "::error::Run Prepare release on the source branch, not a tag or the generated release branch."
+            exit 1
+          fi
+          python3 scripts/release-notes.py "v$VERSION"
 
   desktop:
     needs: validate-release
@@ -34,7 +42,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             source: target/x86_64-unknown-linux-gnu/release/libgdble.so
             output: libgdble.linux.x86_64.so
-          - os: macos-latest
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             source: target/x86_64-apple-darwin/release/libgdble.dylib
             output: libgdble.macos.x86_64.dylib
@@ -60,6 +68,7 @@ jobs:
         with:
           name: desktop-${{ matrix.target }}
           path: artifact/*
+          if-no-files-found: error
 
   android:
     needs: validate-release
@@ -84,10 +93,15 @@ jobs:
         with:
           name: android-aars
           path: addons/gdble/android/*.aar
+          if-no-files-found: error
 
   release-pr:
     needs: [desktop, android]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -98,13 +112,16 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)" = "$VERSION"
+          python3 scripts/release-notes.py "v$VERSION"
           mkdir -p addons/gdble/android
           cp release-artifacts/libgdble.* addons/gdble/
           cp release-artifacts/*.aar addons/gdble/android/
           python3 scripts/artifact_provenance.py generate
           python3 scripts/artifact_provenance.py validate
-          ! find addons/gdble -maxdepth 1 -type f \( -name 'gdble.dll' -o -name 'libgdble.android.*.so' -o -name 'libgdble.arm64.so' -o -name 'libgdble.x86_64.so' \) | grep .
+          if find addons/gdble -maxdepth 1 -type f \( -name 'gdble.dll' -o -name 'libgdble.android.*.so' -o -name 'libgdble.arm64.so' -o -name 'libgdble.x86_64.so' \) | grep .; then
+            echo "::error::Remove legacy binaries from the canonical addon."
+            exit 1
+          fi
       - uses: chickensoft-games/setup-godot@v2
         with:
           version: "4.2.2"
@@ -117,13 +134,39 @@ jobs:
           use-dotnet: false
       - name: Smoke-test the assembled addon on current Godot
         run: python3 scripts/test-godot.py --mode artifact
+      - name: Reject source branch changes during the build
+        run: |
+          current_head="$(git ls-remote origin "$GITHUB_REF" | cut -f1)"
+          if [ "$current_head" != "$GITHUB_SHA" ]; then
+            echo "::error::The source branch changed during this build. Rerun Prepare release on its latest commit."
+            exit 1
+          fi
       - uses: peter-evans/create-pull-request@v7
+        id: release-pr
         with:
+          base: ${{ github.ref_name }}
           branch: release/v${{ inputs.version }}
           commit-message: "chore: prepare GDBLE v${{ inputs.version }}"
           title: "Release GDBLE v${{ inputs.version }}"
           body: |
             Prepared release artifacts, embedded source provenance, SHA-256 hashes, and final-addon smoke tests.
+            Wait for this Prepare release run and the dispatched CI run on this PR branch to succeed.
             Real Android BLE evidence for API 23–30 and API 31+ is required before release.
             Merge this PR before creating tag `v${{ inputs.version }}` on the merge commit.
           add-paths: addons/gdble
+      - name: Check out the committed PR artifacts
+        if: steps.release-pr.outputs.pull-request-number != '' && steps.release-pr.outputs.pull-request-operation != 'closed'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release-pr.outputs.pull-request-head-sha }}
+      - name: Validate the committed PR and dispatch CI
+        if: steps.release-pr.outputs.pull-request-number != '' && steps.release-pr.outputs.pull-request-operation != 'closed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_BRANCH: ${{ steps.release-pr.outputs.pull-request-branch }}
+        run: |
+          python3 scripts/release-notes.py "v$VERSION"
+          python3 scripts/artifact_provenance.py validate
+          # GITHUB_TOKEN-created PR events do not trigger CI; workflow_dispatch does.
+          gh workflow run ci.yml --ref "$RELEASE_BRANCH"

@@ -12,6 +12,98 @@ const CHARACTERISTIC: &str = "00002a37-0000-1000-8000-00805f9b34fb";
 const OTHER: &str = "00002a38-0000-1000-8000-00805f9b34fb";
 
 #[test]
+fn unsubscribing_inactive_keys_preserves_other_services_and_backend_state() {
+    let (backend, mut core, client) = runtime();
+    success(&mut core, client.initialize());
+    success(&mut core, client.connect(ADDRESS));
+    success(
+        &mut core,
+        client.subscribe(ADDRESS, SERVICE, CHARACTERISTIC),
+    );
+    let other_service = "0000180f-0000-1000-8000-00805f9b34fb";
+
+    // Inactive keys must not reach the backend. Keep this injected failure
+    // for the next actual subscription removal.
+    backend.fail_next_unsubscribe(BleError::UnsubscribeFailed("radio busy".into()));
+    for (service, characteristic) in [(other_service, CHARACTERISTIC), (SERVICE, OTHER)] {
+        let id = client
+            .unsubscribe(ADDRESS, service, characteristic)
+            .unwrap();
+        let event = wait_for_event(&mut core, |e| e.operation_id == id && e.terminal);
+        assert_eq!(event.phase, Phase::Succeeded);
+        assert_eq!(event.data, EventData::Reason("already_unsubscribed".into()));
+        backend.emit_notification(CHARACTERISTIC, vec![1]);
+        let value = wait_for_event(&mut core, |e| e.operation == Operation::Notification);
+        assert_eq!(value.context.service_uuid, SERVICE);
+        assert_eq!(value.data, EventData::Bytes(vec![1]));
+    }
+
+    let id = client
+        .unsubscribe(ADDRESS, SERVICE, CHARACTERISTIC)
+        .unwrap();
+    let event = wait_for_event(&mut core, |e| e.operation_id == id && e.terminal);
+    assert_eq!(event.error.unwrap().code, "UNSUBSCRIBE_FAILED");
+    success(
+        &mut core,
+        client.subscribe(ADDRESS, SERVICE, CHARACTERISTIC),
+    );
+    backend.emit_notification(CHARACTERISTIC, vec![2]);
+    assert_eq!(
+        wait_for_event(&mut core, |e| e.operation == Operation::Notification).data,
+        EventData::Bytes(vec![2])
+    );
+
+    success(
+        &mut core,
+        client.unsubscribe(ADDRESS, SERVICE, CHARACTERISTIC),
+    );
+    success(
+        &mut core,
+        client.unsubscribe(ADDRESS, SERVICE, CHARACTERISTIC),
+    );
+    success(
+        &mut core,
+        client.subscribe(ADDRESS, other_service, CHARACTERISTIC),
+    );
+    success(
+        &mut core,
+        client.unsubscribe(ADDRESS, SERVICE, CHARACTERISTIC),
+    );
+    backend.emit_notification(CHARACTERISTIC, vec![3]);
+    let value = wait_for_event(&mut core, |e| e.operation == Operation::Notification);
+    assert_eq!(value.context.service_uuid, other_service);
+    assert_eq!(value.data, EventData::Bytes(vec![3]));
+}
+
+#[test]
+fn stop_scan_uses_live_requests_before_old_terminal_events_are_drained() {
+    let (_, mut core, client) = runtime();
+    success(&mut core, client.initialize());
+    let old = client.start_scan(Some(Duration::from_millis(5))).unwrap();
+    // Retire the old scan without consuming its started/terminal events,
+    // reproducing a Godot main thread that is behind the BLE worker.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while client.stop_scan() != OperationId::UNSOLICITED {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(1));
+    }
+    let new = client.start_scan(None).unwrap();
+    assert_eq!(client.stop_scan(), new);
+    let mut terminals = HashMap::new();
+    while terminals.len() < 2 {
+        assert!(Instant::now() < deadline);
+        while let Some(event) = core.try_recv() {
+            if event.terminal && [old, new].contains(&event.operation_id) {
+                assert!(terminals.insert(event.operation_id, event.phase).is_none());
+            }
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(terminals[&new], Phase::Succeeded);
+    assert_eq!(client.stop_scan(), OperationId::UNSOLICITED);
+}
+
+#[test]
 fn local_disconnect_echo_before_result_preserves_queued_reconnect() {
     let (backend, mut core, client) = runtime();
     success(&mut core, client.initialize());
@@ -385,7 +477,7 @@ fn stopped_consumer_does_not_block_scan_stop_or_accepted_disconnect() {
             expected.insert(id);
         }
     }
-    client.stop_scan(scan);
+    assert_eq!(client.stop_scan(), scan);
     let deadline = Instant::now() + Duration::from_secs(1);
     while backend.stop_scan_calls() == 0 || backend.is_connected(ADDRESS) {
         assert!(

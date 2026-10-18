@@ -9,12 +9,13 @@
 - `scripts/validate-android-aar.py [directory]`: validate native libraries, the extension asset, plugin metadata, and Java classes in both AARs using Python 3. The default directory is `addons/gdble/android`.
 - `scripts/release-notes.py <tag>`: require a matching Cargo version and a nonempty UTF-8 file at `release-notes/<tag>.md`. Requires Python 3.11+ for the standard-library TOML parser.
 - `scripts/test-build-failures.ps1`: inject desktop Cargo, metadata, Android Rust, bridge Gradle, and plugin Gradle failures in isolated fixtures under `target/`. Verify failure propagation, working-directory restoration, and preservation of existing distribution artifacts.
+- `python -m unittest discover -s scripts -p 'test_*.py'`: validate release notes, provenance, final-artifact testing, and real Git archive contents. Distribution checks require the root and addon license copies to agree.
 
 All Cargo commands use `--locked`. Android builds require `cargo-ndk`, JDK 17, SDK 34, and `ANDROID_NDK_HOME`.
 
 Desktop and Android scripts use `target/desktop-build` and `target/android-build`. Tests use independent directories (`target/repair-build`, `target/godot-source-build`, `target/godot-harness-build`); never share a Cargo target directory with copied review fixtures. The optional `test-harness` feature is exclusively for integration tests and must not be used to build release artifacts.
 
-`scripts/artifact_provenance.py generate|validate` records/checks embedded build information and the complete addon hash inventory. `scripts/test-godot.py --mode artifact` validates the actual packaged library without compiling; `--mode source`, `--mode harness`, and `--mode permissions` cover fresh source, callback success paths, and permission transitions. Pass `--godot /absolute/path/to/godot` when it is not on PATH.
+`scripts/artifact_provenance.py generate|validate` records/checks embedded build information, matching `LICENSE` copies, and the complete addon hash inventory. `scripts/test-godot.py --mode artifact` validates the actual packaged library without compiling; `--mode source`, `--mode harness`, and `--mode permissions` cover fresh source, callback success paths, and permission transitions. Harness checks also cover cancellation before old scan events drain, deferred request correlation, and String reason payloads. Pass `--godot /absolute/path/to/godot` when it is not on PATH.
 
 PowerShell scripts check each native build command's exit code before copying its output. Both Android scripts resolve Cargo metadata from the repository root, so callers may start them from another directory.
 

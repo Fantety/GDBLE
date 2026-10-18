@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [master, main]
@@ -24,7 +25,7 @@ jobs:
       - run: cargo test --all-targets --all-features --locked
       - name: Static lifecycle checks
         run: python3 scripts/check-lifecycle.py
-      - name: Release notes validation tests
+      - name: Release and distribution validation tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
   platform-build:

@@ -1,5 +1,9 @@
 {
   "artifacts": {
+    "LICENSE": {
+      "builds": {},
+      "sha256": "496415eeccc29d5bcd0f2d8dc9436ff4b0c08c37241606a63929a089802320f1"
+    },
     "android/btleplug-release.aar": {
       "builds": {},
       "sha256": "c5378a9a247e935368349cb313ac276dc7532c010ff4a65cb13529eccdaa1af1"
@@ -7,23 +11,23 @@
     "android/gdble-release.aar": {
       "builds": {
         "aarch64-linux-android": {
-          "source_commit": "864652a2d4d03971de07ebe7152b6e9b6914fd18",
-          "source_sha256": "b46c7421d90b6460874aa788ccbc169fbbaa5dd3be5eaa3e53663d63b6131ccb",
+          "source_commit": "13c49c745a3ba8ea854e4d004272eb8b32ca439a",
+          "source_sha256": "eac97287ca3f62975d079b9e2b2f2c67984314d6f2f3282d0e9cacdcb6fc023e",
           "target": "aarch64-linux-android",
           "test_harness": false,
           "toolchain": "rustc 1.99.0 (b940084d7 2026-09-28)",
           "version": "0.6.0"
         },
         "x86_64-linux-android": {
-          "source_commit": "864652a2d4d03971de07ebe7152b6e9b6914fd18",
-          "source_sha256": "b46c7421d90b6460874aa788ccbc169fbbaa5dd3be5eaa3e53663d63b6131ccb",
+          "source_commit": "13c49c745a3ba8ea854e4d004272eb8b32ca439a",
+          "source_sha256": "eac97287ca3f62975d079b9e2b2f2c67984314d6f2f3282d0e9cacdcb6fc023e",
           "target": "x86_64-linux-android",
           "test_harness": false,
           "toolchain": "rustc 1.99.0 (b940084d7 2026-09-28)",
           "version": "0.6.0"
         }
       },
-      "sha256": "3b3358324aa9cfbf296dad2659e5c0e3d605a8e57c15e155d0a41ff20d0d83d9"
+      "sha256": "ad85d6e2055a279d82406b3f09db74e7ae9ee5500174de25166a623e33bb63ad"
     },
     "gdble.gdap": {
       "builds": {},
@@ -36,28 +40,28 @@
     "libgdble.linux.x86_64.so": {
       "builds": {
         "x86_64-unknown-linux-gnu": {
-          "source_commit": "864652a2d4d03971de07ebe7152b6e9b6914fd18",
-          "source_sha256": "b46c7421d90b6460874aa788ccbc169fbbaa5dd3be5eaa3e53663d63b6131ccb",
+          "source_commit": "13c49c745a3ba8ea854e4d004272eb8b32ca439a",
+          "source_sha256": "eac97287ca3f62975d079b9e2b2f2c67984314d6f2f3282d0e9cacdcb6fc023e",
           "target": "x86_64-unknown-linux-gnu",
           "test_harness": false,
           "toolchain": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
           "version": "0.6.0"
         }
       },
-      "sha256": "ca954fbe065d20079147d4346dc6bf9e0ce8aef3ed9de6dd746459d03c842a0b"
+      "sha256": "aa78e693a78654ea49f12f0777ed894457d92123cf8d09fa55f26849a099911b"
     },
     "libgdble.windows.x86_64.dll": {
       "builds": {
         "x86_64-pc-windows-msvc": {
-          "source_commit": "864652a2d4d03971de07ebe7152b6e9b6914fd18",
-          "source_sha256": "b46c7421d90b6460874aa788ccbc169fbbaa5dd3be5eaa3e53663d63b6131ccb",
+          "source_commit": "13c49c745a3ba8ea854e4d004272eb8b32ca439a",
+          "source_sha256": "eac97287ca3f62975d079b9e2b2f2c67984314d6f2f3282d0e9cacdcb6fc023e",
           "target": "x86_64-pc-windows-msvc",
           "test_harness": false,
           "toolchain": "rustc 1.99.0 (b940084d7 2026-09-28)",
           "version": "0.6.0"
         }
       },
-      "sha256": "14f8c05d252de5efb3f3e58fd72fa076a37e560394281c3e6ebb23bea834325e"
+      "sha256": "db99973307bb402f913b9e73c127019d8fd38cb75cb0a3e531d58b1bb6e65ac5"
     },
     "permission_startup.gd": {
       "builds": {},
@@ -70,6 +74,6 @@
   ],
   "release_ready": false,
   "schema": 1,
-  "source_sha256": "b46c7421d90b6460874aa788ccbc169fbbaa5dd3be5eaa3e53663d63b6131ccb",
+  "source_sha256": "eac97287ca3f62975d079b9e2b2f2c67984314d6f2f3282d0e9cacdcb6fc023e",
   "version": "0.6.0"
 }

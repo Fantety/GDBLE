@@ -65,15 +65,21 @@ impl CoreClient {
         result
     }
 
-    pub fn stop_scan(&self, operation_id: OperationId) -> OperationId {
-        if let Some(token) = self
-            .scan_control
-            .requests
-            .lock()
-            .unwrap()
-            .get(&operation_id)
-        {
+    pub fn stop_scan(&self) -> OperationId {
+        // The worker retires requests before Godot consumes their terminal
+        // events. Its registry, rather than the main-thread cache, identifies
+        // the current scan. Also cancel already submitted starts so none can
+        // become an uncancelled scan while the current one is stopping.
+        let requests = self.scan_control.requests.lock().unwrap();
+        let operation_id = requests
+            .keys()
+            .min_by_key(|id| id.get())
+            .copied()
+            .unwrap_or(OperationId::UNSOLICITED);
+        for token in requests.values() {
             token.cancel();
+        }
+        if operation_id != OperationId::UNSOLICITED {
             self.scan_control.changed.notify_one();
         }
         operation_id
@@ -415,10 +421,44 @@ mod tests {
             client.initialize().unwrap_err().error.unwrap().code,
             "QUEUE_FULL"
         );
-        assert_eq!(client.stop_scan(id), id);
+        assert_eq!(client.stop_scan(), id);
         let CoreCommand::StartScan { cancellation, .. } = command_rx.try_recv().unwrap() else {
             panic!("expected queued scan");
         };
+        assert!(cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn stop_scan_cancels_all_existing_starts_but_not_future_starts() {
+        let (command_tx, mut command_rx) = mpsc::channel(4);
+        let (event_tx, _event_rx) = mpsc::channel(8);
+        let client = CoreClient {
+            command_tx,
+            outbox: Arc::new(EventOutbox::new(event_tx)),
+            scan_control: Arc::new(ScanControl::default()),
+            next_operation_id: Arc::new(AtomicI64::new(1)),
+        };
+        assert_eq!(client.stop_scan(), OperationId::UNSOLICITED);
+        let first = client.start_scan(None).unwrap();
+        let second = client.start_scan(None).unwrap();
+        assert_eq!(client.stop_scan(), first);
+        for _ in 0..2 {
+            let CoreCommand::StartScan { cancellation, .. } = command_rx.try_recv().unwrap() else {
+                panic!("expected queued scan");
+            };
+            assert!(cancellation.is_cancelled());
+        }
+        for id in [first, second] {
+            client.scan_control.finish(id);
+            client.outbox.release_request(id);
+        }
+        assert_eq!(client.stop_scan(), OperationId::UNSOLICITED);
+        let next = client.start_scan(None).unwrap();
+        let CoreCommand::StartScan { cancellation, .. } = command_rx.try_recv().unwrap() else {
+            panic!("expected queued scan");
+        };
+        assert!(!cancellation.is_cancelled());
+        assert_eq!(client.stop_scan(), next);
         assert!(cancellation.is_cancelled());
     }
 }

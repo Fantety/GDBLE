@@ -20,6 +20,8 @@ class ProvenanceTests(unittest.TestCase):
         for name in ["Cargo.lock", "build.rs", "src/lib.rs"]:
             (self.root / name).write_text("source\n", encoding="utf-8")
         (self.root / "Cargo.toml").write_text('[package]\nversion="0.6.0"\n', encoding="utf-8")
+        (self.root / "LICENSE").write_text("MIT license fixture\n", encoding="utf-8")
+        (self.addon / "LICENSE").write_text("MIT license fixture\n", encoding="utf-8")
         for name in ["gdble.gdap", "gdble.gdextension", "permission_startup.gd"]:
             (self.addon / name).write_text("config\n", encoding="utf-8")
         self.digest = provenance.source_digest(self.root)
@@ -80,6 +82,29 @@ class ProvenanceTests(unittest.TestCase):
         path.write_bytes(path.read_bytes().replace(b'"test_harness": false', b'"test_harness": true'))
         with self.assertRaisesRegex(ValueError, "test backend"):
             provenance.generate(self.root, self.addon)
+
+    def test_missing_license_cannot_ship(self):
+        (self.addon / "LICENSE").unlink()
+        with self.assertRaisesRegex(ValueError, "LICENSE"):
+            provenance.generate(self.root, self.addon)
+
+    def test_license_must_match_even_if_artifact_hashes_are_valid(self):
+        provenance.generate(self.root, self.addon)
+        (self.root / "LICENSE").write_text("updated license\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "LICENSE must match"):
+            provenance.validate(self.root, self.addon)
+        with self.assertRaisesRegex(ValueError, "LICENSE must match"):
+            provenance.generate(self.root, self.addon)
+
+    def test_generated_manifest_hashes_survive_git_line_ending_normalization(self):
+        provenance.generate(self.root, self.addon)
+        # Git normalizes generated text to LF when adding it to the release
+        # commit. The recorded BUILD_INFO.json hash must remain valid.
+        for name in ("BUILD_INFO.json", "SHA256SUMS"):
+            path = self.addon / name
+            path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
+        with patch.object(provenance.subprocess, "run"):
+            provenance.validate(self.root, self.addon)
 
 
 if __name__ == "__main__":

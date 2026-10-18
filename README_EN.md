@@ -54,9 +54,9 @@ A Rust BLE GDExtension for Godot 4.2+, built on btleplug 0.12.0. It supports sca
 
 - ✅ **Modern Architecture**: Built with Rust and async runtime for excellent performance
 - ✅ **Real-time Response**: BLE requests run in the background
-- ✅ **Complete Features**: Supports all BLE operations including scan, connect, read, write, and notify
+- ✅ **Common BLE Features**: Scan, connect, discover GATT, read, write, and notify
 - ✅ **Easy to Use**: Clean GDScript API with signal-driven event system
-- ✅ **Debuggable**: Built-in debug mode for development and troubleshooting
+- ✅ **Debuggable**: Structured events and a demo debugger for diagnosing operation failures
 
 ---
 
@@ -84,12 +84,14 @@ A Rust BLE GDExtension for Godot 4.2+, built on btleplug 0.12.0. It supports sca
 
 ## Platform Support
 
-| Platform | Architectures | Minimum |
-| --- | --- | --- |
-| ✅ Windows | x86_64 | Windows 10 |
-| ✅ Linux | x86_64 | BlueZ/DBus runtime |
-| ✅ macOS | x86_64, ARM64 | macOS 10.15 / 11 |
-| ✅ Android | ARM64, x86_64 | API 23, compileSdk 34 |
+| Platform | Architectures | Minimum | Validation scope and release gaps |
+| --- | --- | --- | --- |
+| Windows | x86_64 | Windows 10 | Native build, Godot loading, and fake-backend tests; physical BLE acceptance is separate |
+| Linux | x86_64 | BlueZ/DBus runtime | Build and Godot loading; physical BlueZ/device acceptance is separate |
+| macOS | x86_64, ARM64 | macOS 10.15 / 11 | Source checks pass; historical libraries still require native rebuilding and loading tests |
+| Android | ARM64, x86_64 | API 23, compileSdk 34 | Both ABIs build and AAR structure is checked; ARM64 hardware BLE and x86_64 emulator acceptance remain outstanding |
+
+This is not a complete hardware certification matrix. Recheck artifact provenance after every source change; see the [validation record](docs/REPAIR_VALIDATION.md) for current evidence. The development branch's `addons/gdble` may contain artifacts awaiting replacement and is not a complete cross-platform release. Asset Library entries should use a tag that has passed release acceptance.
 
 Android ARMv7, iOS, and automatic reconnect are not supported in 0.6.0.
 
@@ -124,6 +126,7 @@ your_project/
         ├── gdble.gdextension
         ├── gdble.gdap
         ├── permission_startup.gd
+        ├── LICENSE
         ├── BUILD_INFO.json
         ├── SHA256SUMS
         ├── libgdble.windows.x86_64.dll
@@ -291,7 +294,7 @@ Both public classes expose `ble_event(event: Dictionary)`:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `operation` | StringName | initialize, scan, connect, disconnect, discover_services, read, write, subscribe, unsubscribe, notification |
+| `operation` | StringName | initialize, scan, connect, disconnect, discover_services, read, write, subscribe, unsubscribe, notification, resolve_device |
 | `phase` | StringName | started, progress, succeeded, failed, cancelled, received |
 | `operation_id` | int | Positive for calls; `0` for unsolicited events such as remote disconnect |
 | `terminal` | bool | Whether this operation ID has completed |
@@ -301,7 +304,7 @@ Both public classes expose `ble_event(event: Dictionary)`:
 | `data` | Variant | Adapter, DeviceInfo, services, bytes, or reason text |
 | `error` | Dictionary | Always contains `code/message/retryable/details` |
 
-Methods that previously returned `void` now return an ignorable operation ID. Each positive ID receives exactly one terminal event while the Manager is alive and processing events; destroying it cancels background work without promising delivery of remaining events. `stop_scan()` returns the current scan ID or `0` when idle, and cancellation does not depend on command queue capacity.
+Methods that previously returned `void` now return an ignorable operation ID. Each positive ID receives exactly one terminal event while the Manager is alive and processing events; destroying it cancels background work without promising delivery of remaining events. `stop_scan()` cancels all scan requests submitted and still unfinished at the time of the call, including queued starts, and returns their oldest ID or `0` when none remain. It does not depend on the main thread having consumed an earlier scan's terminal event or on command queue capacity. Scans submitted after the stop call are unaffected.
 
 Connect signals before calling methods. Invalid arguments, uninitialized standalone devices, and command queue rejections emit failure synchronously, before the method returns. A handler must not depend solely on an ID assigned after the call. Local rejections from a `BleDevice` are emitted by that device and are not forwarded to the Manager. Accepted requests complete asynchronously through the bounded event queue; the Manager forwards device events to the corresponding device. Caches update before structured and legacy signals, so synchronous getters inside callbacks see the corresponding state. Request rejection does not change an existing connection.
 
@@ -311,11 +314,13 @@ New stable errors include `INVALID_ARGUMENT`, `NOT_INITIALIZED`, `BUSY`, `QUEUE_
 
 Admission reserves capacity for both started and terminal events. Reservation failure synchronously returns `QUEUE_FULL` without executing backend work. Command capacity remains 64, outbound event capacity 1024, and the per-frame budget 256. Control and high-rate data use separate channels. Congested scan updates coalesce by device and evict the oldest pending update with `EVENT_OVERFLOW`. Non-request failures have `operation_id = 0`, `terminal = false`. Repeated unsolicited state changes may coalesce to the latest state under pressure; request outcomes never coalesce.
 
-Subscriptions use the full `(service_uuid, characteristic_uuid)` key and each device has one notification pump. Since btleplug notifications omit the service UUID, subscribing to the same characteristic UUID under two services fails with `AMBIGUOUS_CHARACTERISTIC`.
+Subscriptions use the full `(service_uuid, characteristic_uuid)` key and each device has one notification pump. Since btleplug notifications omit the service UUID, subscribing to the same characteristic UUID under two services fails with `AMBIGUOUS_CHARACTERISTIC`. On a connected session whose GATT state has not been invalidated, unsubscribing an inactive full GATT key succeeds idempotently with `data = "already_unsubscribed"`, without calling the backend or affecting another service's subscription. A failed unsubscribe of an active key retains that subscription.
 
 The notification receiver is ready before backend subscribe starts. Preparation buffers at most 64 values / 64 KiB per device; subscription success precedes buffered delivery. Any notification overflow reports `EVENT_OVERFLOW` (`error.details.source` identifies the buffer), stops that device's pump, and clears undelivered data while preserving the connection. The application must subscribe again. Notification failures also project to legacy `operation_failed`.
 
-Power-off or unknown adapter state emits a nonterminal `initialize` failure with `ADAPTER_UNAVAILABLE` and `error.details.state` (`powered_off` or `unknown`), invalidates initialization, and cancels scan/device work. Power-on emits `initialize` progress with `data.reason = powered_on`; explicitly initialize again. Service changes report `SERVICES_CHANGED`, clear GATT/subscription caches, and require discovery before resubscribing. No automatic reconnect is performed.
+Power-off or unknown adapter state emits a nonterminal `initialize` failure with `ADAPTER_UNAVAILABLE` and `error.details.state` (`powered_off` or `unknown`), invalidates initialization, and cancels scan/device work. Power-on emits `initialize` progress with the String `data = "powered_on"`; explicitly initialize again. Service changes report `SERVICES_CHANGED`, clear GATT/subscription caches, and require discovery before resubscribing. No automatic reconnect is performed.
+
+See the [API contract](docs/API_CONTRACT.md) for per-operation payloads, the complete error code list, request correlation, and object lifetimes.
 
 ---
 
@@ -498,7 +503,7 @@ func _on_blue_button_pressed():
 
 ## Debug Mode
 
-The `set_debug_mode()` / `is_debug_mode()` compatibility API remains available. To diagnose operation results, also log `ble_event` from both the Manager and device:
+The `set_debug_mode()` / `is_debug_mode()` compatibility flag remains available; it does not enable an additional native logging stream. To diagnose operation results, log `ble_event` from the Manager and device (accepted device events appear on both, so deduplicate when aggregating):
 
 ```gdscript
 bluetooth_manager.set_debug_mode(OS.is_debug_build())
@@ -525,7 +530,7 @@ Disable the compatibility debug flag with `bluetooth_manager.set_debug_mode(fals
 1. Ensure Bluetooth adapter is enabled
 2. Ensure target device is in advertising state
 3. Check if device is within range (usually within 10 meters)
-4. Enable debug mode to view detailed logs
+4. Log `ble_event` or use the demo debugger to inspect failures
 
 ### Q: What if device connection fails?
 
@@ -555,7 +560,7 @@ func _on_device_disconnected():
 1. Does characteristic support write (check `properties.write`)
 2. Is data format correct
 3. Do you need to use `with_response` parameter
-4. Enable debug mode to view error messages
+4. Inspect the code and details in `ble_event.error`
 
 ### Q: How to find correct service and characteristic UUIDs?
 

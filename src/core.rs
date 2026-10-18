@@ -812,6 +812,13 @@ impl CoreState {
                 )));
             }
         }
+        if let DeviceAction::Unsubscribe(key) = &action {
+            // An inactive full GATT key must never touch another service's
+            // subscription, even when its characteristic UUID is identical.
+            if !session.subscriptions.contains(key) {
+                return Some(Ok(EventData::Reason("already_unsubscribed".to_string())));
+            }
+        }
         None
     }
 
@@ -1318,12 +1325,13 @@ impl CoreState {
                         session.notification_buffer_bytes = 0;
                     }
                     DeviceAction::Unsubscribe(key) => {
-                        session.subscriptions.remove(key);
-                        session
-                            .notification_routes
-                            .lock()
-                            .unwrap()
-                            .remove(key.characteristic_uuid());
+                        if session.subscriptions.remove(key) {
+                            session
+                                .notification_routes
+                                .lock()
+                                .unwrap()
+                                .remove(key.characteristic_uuid());
+                        }
                     }
                     DeviceAction::Read(_) | DeviceAction::Write { .. } => {}
                 }

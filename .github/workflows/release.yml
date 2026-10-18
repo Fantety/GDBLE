@@ -5,10 +5,26 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: publish-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    outputs:
+      notes_path: ${{ steps.metadata.outputs.notes_path }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate version and release notes before platform tests
+        id: metadata
+        run: python3 scripts/release-notes.py "$GITHUB_REF_NAME" --github-output "$GITHUB_OUTPUT"
+
   final-addon-smoke:
+    needs: validate-release
     strategy:
       fail-fast: false
       matrix:
@@ -30,14 +46,14 @@ jobs:
           python scripts/test-godot.py --mode artifact
 
   validate-package-publish:
-    needs: final-addon-smoke
+    needs: [validate-release, final-addon-smoke]
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Validate tag commit
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)" = "$version"
           python3 scripts/release-notes.py "$GITHUB_REF_NAME"
           python3 scripts/artifact_provenance.py validate
           test -f addons/gdble/libgdble.windows.x86_64.dll
@@ -47,16 +63,26 @@ jobs:
           test -f addons/gdble/android/gdble-release.aar
           test -f addons/gdble/android/btleplug-release.aar
           (cd addons/gdble && sha256sum --check SHA256SUMS)
-          ! find addons/gdble -maxdepth 1 -type f \( -name 'gdble.dll' -o -name 'libgdble.android.*.so' -o -name 'libgdble.arm64.so' -o -name 'libgdble.x86_64.so' \) | grep .
-          ! git ls-tree -r --name-only HEAD demo/addons/gdble | grep .
+          if find addons/gdble -maxdepth 1 -type f \( -name 'gdble.dll' -o -name 'libgdble.android.*.so' -o -name 'libgdble.arm64.so' -o -name 'libgdble.x86_64.so' \) | grep .; then
+            echo "::error::Remove legacy binaries from the canonical addon."
+            exit 1
+          fi
+          if git ls-tree -r --name-only HEAD demo/addons/gdble | grep .; then
+            echo "::error::The generated demo addon must not be tracked."
+            exit 1
+          fi
       - name: Package tag contents
         run: |
           mkdir -p package
           cp -R addons package/
+          cp -R docs package/
           cp README.md README_EN.md LICENSE package/
-          (cd package && zip -r ../gdble-${GITHUB_REF_NAME}.zip .)
+          (cd package && zip -r "../gdble-${GITHUB_REF_NAME}.zip" .)
       - uses: softprops/action-gh-release@v2
         with:
-          body_path: release-notes/${{ github.ref_name }}.md
+          tag_name: ${{ github.ref_name }}
+          body_path: ${{ needs.validate-release.outputs.notes_path }}
+          prerelease: ${{ needs.validate-release.outputs.prerelease == 'true' }}
           generate_release_notes: false
+          fail_on_unmatched_files: true
           files: gdble-${{ github.ref_name }}.zip
