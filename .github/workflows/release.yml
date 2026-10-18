@@ -22,28 +22,12 @@ jobs:
       - name: Validate version and release notes before platform tests
         id: metadata
         run: python3 scripts/release-notes.py "$GITHUB_REF_NAME" --github-output "$GITHUB_OUTPUT"
+      - name: Reject unprepared tags before starting the platform matrix
+        run: python3 scripts/artifact_provenance.py validate
 
   final-addon-smoke:
     needs: validate-release
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-15-intel, macos-latest]
-        godot: ["4.2.2", "4.6.1"]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: chickensoft-games/setup-godot@v2
-        with:
-          version: ${{ matrix.godot }}
-          use-dotnet: false
-      - name: Validate and load the exact tag artifacts without rebuilding
-        run: |
-          python scripts/artifact_provenance.py validate
-          python scripts/test-godot.py --mode artifact
+    uses: ./.github/workflows/smoke-addon.yml
 
   validate-package-publish:
     needs: [validate-release, final-addon-smoke]

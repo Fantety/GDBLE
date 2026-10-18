@@ -2,6 +2,8 @@
 
 GDBLE releases are two-phase so source, manifests, hashes, and binaries share one commit.
 
+CI and preparation both call `build-addon.yml` to build every platform and upload a validated `assembled-addon`. CI, preparation, and publishing share `smoke-addon.yml`: it loads the same addon bytes on Windows, Linux, Intel macOS, and ARM macOS with both supported Godot versions. Preparation opens the artifact PR only after all eight smoke jobs pass. Ordinary CI stores its artifacts in the workflow run; repository writeback belongs to preparation.
+
 ## Repository prerequisites
 
 - Merge the workflow files into the default branch before the first run, including `CI`'s `workflow_dispatch` trigger.
@@ -53,3 +55,11 @@ Validate locally with Python 3.11+ using `python3 scripts/release-notes.py v0.6.
 - API 23–30 and API 31+ ARM64 real-device BLE loops pass.
 - x86_64 emulator load test passes.
 - The tag archive has no raw Android `.so`, Demo addon copy, or legacy unreferenced binaries.
+
+## Recovering an unprepared tag
+
+An `addon is incomplete` error means the tagged commit's `BUILD_INFO.json` is not release-ready. This is a repository artifact problem even when reported by a GitHub-hosted runner. Publishing now rejects it before starting the platform matrix and reports each incomplete artifact. Rerunning that old tag cannot pick up later changes on `master`.
+
+Run preparation from the corrected source branch, merge its tested artifact PR, and validate the resulting commit before publishing. If a tag was already pushed prematurely, either use a new version or explicitly agree to move that existing tag; do not silently rewrite published tag history. `v0.6.0` was initially pushed on `20ed4e0` with two stale macOS libraries, so that original tag is not a complete distribution.
+
+The smoke launcher uses the absolute `GODOT`/`GODOT4` path exported by setup-godot, with `--godot` taking precedence. Its Windows alias has no `.exe` suffix and cannot be found reliably using the bare name through Python's process launcher. Validation and loading are separate steps, so a failed native command cannot be hidden by a later PowerShell command.

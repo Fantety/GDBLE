@@ -29,74 +29,18 @@ jobs:
           fi
           python3 scripts/release-notes.py "v$VERSION"
 
-  desktop:
+  build-addon:
     needs: validate-release
-    strategy:
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            source: target/x86_64-pc-windows-msvc/release/gdble.dll
-            output: libgdble.windows.x86_64.dll
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            source: target/x86_64-unknown-linux-gnu/release/libgdble.so
-            output: libgdble.linux.x86_64.so
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            source: target/x86_64-apple-darwin/release/libgdble.dylib
-            output: libgdble.macos.x86_64.dylib
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            source: target/aarch64-apple-darwin/release/libgdble.dylib
-            output: libgdble.macos.arm64.dylib
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - name: Linux dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libudev-dev
-      - run: cargo build --release --locked --target ${{ matrix.target }}
-      - shell: bash
-        run: |
-          mkdir artifact
-          cp '${{ matrix.source }}' 'artifact/${{ matrix.output }}'
-      - uses: actions/upload-artifact@v4
-        with:
-          name: desktop-${{ matrix.target }}
-          path: artifact/*
-          if-no-files-found: error
+    uses: ./.github/workflows/build-addon.yml
 
-  android:
-    needs: validate-release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,x86_64-linux-android
-      - uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r27c
-      - run: cargo install cargo-ndk --locked
-      - run: bash scripts/build-android.sh
-      - name: Validate Android package
-        run: python3 scripts/validate-android-aar.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: android-aars
-          path: addons/gdble/android/*.aar
-          if-no-files-found: error
+  final-addon-smoke:
+    needs: build-addon
+    uses: ./.github/workflows/smoke-addon.yml
+    with:
+      artifact-name: assembled-addon
 
   release-pr:
-    needs: [desktop, android]
+    needs: final-addon-smoke
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -106,34 +50,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          path: release-artifacts
-          merge-multiple: true
-      - name: Update canonical addon and hashes
+          name: assembled-addon
+          path: addons/gdble
+      - name: Validate the tested addon before committing
         env:
           VERSION: ${{ inputs.version }}
         run: |
           python3 scripts/release-notes.py "v$VERSION"
-          mkdir -p addons/gdble/android
-          cp release-artifacts/libgdble.* addons/gdble/
-          cp release-artifacts/*.aar addons/gdble/android/
-          python3 scripts/artifact_provenance.py generate
           python3 scripts/artifact_provenance.py validate
-          if find addons/gdble -maxdepth 1 -type f \( -name 'gdble.dll' -o -name 'libgdble.android.*.so' -o -name 'libgdble.arm64.so' -o -name 'libgdble.x86_64.so' \) | grep .; then
-            echo "::error::Remove legacy binaries from the canonical addon."
-            exit 1
-          fi
-      - uses: chickensoft-games/setup-godot@v2
-        with:
-          version: "4.2.2"
-          use-dotnet: false
-      - name: Smoke-test the assembled addon (no compilation)
-        run: python3 scripts/test-godot.py --mode artifact
-      - uses: chickensoft-games/setup-godot@v2
-        with:
-          version: "4.6.1"
-          use-dotnet: false
-      - name: Smoke-test the assembled addon on current Godot
-        run: python3 scripts/test-godot.py --mode artifact
       - name: Reject source branch changes during the build
         run: |
           current_head="$(git ls-remote origin "$GITHUB_REF" | cut -f1)"

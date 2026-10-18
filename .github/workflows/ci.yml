@@ -28,35 +28,14 @@ jobs:
       - name: Release and distribution validation tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
-  platform-build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - os: macos-latest
-            target: x86_64-apple-darwin
-          - os: macos-latest
-            target: aarch64-apple-darwin
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - name: Install Linux BLE dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libudev-dev
-      - run: cargo build --release --locked --target ${{ matrix.target }}
-      - name: Windows backend mapping and lifecycle regression tests
-        if: runner.os == 'Windows'
-        run: cargo test --all-targets --all-features --locked
-      - name: Build script failure regression tests
-        if: runner.os == 'Windows'
-        run: .\scripts\test-build-failures.ps1
+  build-addon:
+    uses: ./.github/workflows/build-addon.yml
+
+  final-addon-smoke:
+    needs: build-addon
+    uses: ./.github/workflows/smoke-addon.yml
+    with:
+      artifact-name: assembled-addon
 
   godot-load:
     runs-on: ubuntu-latest
@@ -78,22 +57,3 @@ jobs:
           python3 scripts/test-godot.py --mode harness
           python3 scripts/test-godot.py --mode permissions
           python3 scripts/test-godot.py --mode debugger
-
-  android-aar:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,x86_64-linux-android
-      - uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r27c
-      - run: cargo install cargo-ndk --locked
-      - run: bash scripts/build-android.sh
-      - name: Validate AAR contents
-        run: python3 scripts/validate-android-aar.py

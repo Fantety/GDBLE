@@ -108,7 +108,8 @@ def generate(root: Path, addon: Path, allow_incomplete: bool = False) -> dict:
 def validate(root: Path, addon: Path) -> None:
     report = json.loads((addon / "BUILD_INFO.json").read_text(encoding="utf-8"))
     if report.get("schema") != 1 or not report.get("release_ready") or report.get("incomplete"):
-        raise ValueError("addon is incomplete; rebuild every required platform before release")
+        failures = "\n".join(str(item) for item in report.get("incomplete", []))
+        raise ValueError("addon is incomplete; run Prepare release and merge the rebuilt addon before tagging.\n" + failures)
     check_license(root, addon)
     digest = source_digest(root)
     version = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]

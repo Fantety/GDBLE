@@ -1,0 +1,110 @@
+name: Build complete addon
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target/ci-build
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            source: gdble.dll
+            output: libgdble.windows.x86_64.dll
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            source: libgdble.so
+            output: libgdble.linux.x86_64.so
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            source: libgdble.dylib
+            output: libgdble.macos.x86_64.dylib
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            source: libgdble.dylib
+            output: libgdble.macos.arm64.dylib
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libudev-dev
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Windows backend mapping and lifecycle regression tests
+        if: runner.os == 'Windows'
+        run: cargo test --all-targets --all-features --locked
+      - name: Build script failure regression tests
+        if: runner.os == 'Windows'
+        run: .\scripts\test-build-failures.ps1
+      - name: Collect native release library
+        shell: bash
+        run: |
+          mkdir artifact
+          cp 'target/ci-build/${{ matrix.target }}/release/${{ matrix.source }}' 'artifact/${{ matrix.output }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: built-${{ matrix.target }}
+          path: artifact/*
+          if-no-files-found: error
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+      - run: cargo install cargo-ndk --locked
+      - run: bash scripts/build-android.sh
+      - name: Validate Android package
+        run: python3 scripts/validate-android-aar.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: built-android-aars
+          path: addons/gdble/android/*.aar
+          if-no-files-found: error
+
+  assemble:
+    needs: [desktop, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: built-*
+          path: built-artifacts
+          merge-multiple: true
+      - name: Assemble every platform and validate provenance
+        run: |
+          cp built-artifacts/libgdble.* addons/gdble/
+          cp built-artifacts/*.aar addons/gdble/android/
+          python3 scripts/artifact_provenance.py generate
+          python3 scripts/artifact_provenance.py validate
+          if find addons/gdble -maxdepth 1 -type f \( -name 'gdble.dll' -o -name 'libgdble.android.*.so' -o -name 'libgdble.arm64.so' -o -name 'libgdble.x86_64.so' \) | grep .; then
+            echo "::error::Remove legacy binaries from the canonical addon."
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assembled-addon
+          path: addons/gdble/
+          if-no-files-found: error

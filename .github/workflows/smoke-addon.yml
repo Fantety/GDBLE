@@ -1,0 +1,45 @@
+name: Verify final addon
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: Download this run's assembled addon; empty uses the checked-out tag artifacts
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-15-intel, macos-latest]
+        godot: ["4.2.2", "4.6.1"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        if: inputs.artifact-name != ''
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: final-addon
+      - name: Validate exact addon provenance
+        env:
+          ADDON_PATH: ${{ inputs.artifact-name != '' && 'final-addon' || 'addons/gdble' }}
+        shell: bash
+        run: python scripts/artifact_provenance.py validate --addon "$ADDON_PATH"
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: ${{ matrix.godot }}
+          use-dotnet: false
+      - name: Load the exact addon without rebuilding
+        env:
+          ADDON_PATH: ${{ inputs.artifact-name != '' && 'final-addon' || 'addons/gdble' }}
+        shell: bash
+        run: python scripts/test-godot.py --mode artifact --addon "$ADDON_PATH"

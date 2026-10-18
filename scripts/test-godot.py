@@ -10,7 +10,21 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def run(godot: str, mode: str, addon: Path, visual_dir: Path | None = None) -> None:
+def resolve_godot(requested: str | None = None) -> str:
+    # setup-godot exports the absolute GODOT path. On Windows its alias has
+    # no .exe suffix, so CreateProcess cannot find it by searching PATH.
+    candidate = requested or os.environ.get("GODOT") or os.environ.get("GODOT4") or "godot"
+    path = Path(candidate).expanduser()
+    if path.is_file():
+        return str(path.resolve())
+    located = shutil.which(candidate)
+    if located:
+        return str(Path(located).resolve())
+    raise SystemExit(f"Godot executable not found: {candidate!r}. Set GODOT or pass --godot with its executable path.")
+
+
+def run(godot: str | None, mode: str, addon: Path, visual_dir: Path | None = None) -> None:
+    godot = resolve_godot(godot)
     root = ROOT / "target"
     root.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="godot-" + mode + "-", dir=root) as temporary:
@@ -50,6 +64,8 @@ def run(godot: str, mode: str, addon: Path, visual_dir: Path | None = None) -> N
                 if output:
                     print(output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output, end="")
             raise SystemExit("Godot verification timed out") from error
+        except OSError as error:
+            raise SystemExit(f"Cannot launch Godot at {godot!r}: {error}") from error
         print(result.stdout, end="")
         print(result.stderr, end="")
         marker = "GDBLE " + {"harness": "reentry", "permissions": "permission", "debugger": "debugger"}.get(mode, "smoke") + " test passed."
@@ -60,7 +76,7 @@ def run(godot: str, mode: str, addon: Path, visual_dir: Path | None = None) -> N
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--godot", default="godot")
+    parser.add_argument("--godot", help="Executable path; defaults to GODOT, GODOT4, then PATH")
     parser.add_argument("--mode", choices=["source", "harness", "artifact", "permissions", "debugger"], required=True)
     parser.add_argument("--addon", type=Path, default=ROOT / "addons/gdble")
     parser.add_argument("--visual-dir", type=Path, help="Render debugger layout screenshots using a visible window")

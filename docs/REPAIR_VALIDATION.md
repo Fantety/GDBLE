@@ -1,5 +1,13 @@
 # 0.6.0 修复与验收记录
 
+## 2026-10-18：GitHub Actions 发布失败修复
+
+[失败运行 39100223795](https://github.com/Fantety/GDBLE/actions/runs/39100223795) 的 8 个最终 addon 冒烟 job 均失败。共同原因是 `v0.6.0` 指向 `20ed4e0`，该提交的两份 macOS 库尚未更新，清单明确为 `release_ready=false`。Windows 在首条校验命令失败后还继续执行，暴露出第二个问题：setup-godot 创建没有 `.exe` 后缀的别名，Python 通过裸 `godot` 名称无法在 PATH 中找到它。
+
+本次将完整平台构建与组装抽成 CI/Prepare 共用流程，将 4 个 OS/架构 × 2 个 Godot 版本的最终产物校验抽成 CI/Prepare/Publish 共用流程。校验和启动拆为独立步骤；Godot 启动器优先读取 action 导出的绝对路径；未准备好的标签在启动矩阵前失败并列出具体缺失产物。原始标签不会通过重跑自动获得主分支的新代码或产物。
+
+本地 actionlint 与 25 项 Python 回归通过；GitHub 实际运行结果待修复提交推送后补记。
+
 ## 2026-10-18：公开仓库复查修复
 
 本轮基线：`13c49c7`。版本保持 `0.6.0`，未创建 tag 或发布 Release。当前源码内容 SHA-256：`eac97287ca3f62975d079b9e2b2f2c67984314d6f2f3282d0e9cacdcb6fc023e`。
