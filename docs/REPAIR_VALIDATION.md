@@ -6,7 +6,9 @@
 
 本次将完整平台构建与组装抽成 CI/Prepare 共用流程，将 4 个 OS/架构 × 2 个 Godot 版本的最终产物校验抽成 CI/Prepare/Publish 共用流程。校验和启动拆为独立步骤；Godot 启动器优先读取 action 导出的绝对路径；未准备好的标签在启动矩阵前失败并列出具体缺失产物。原始标签不会通过重跑自动获得主分支的新代码或产物。
 
-本地 actionlint 与 25 项 Python 回归通过；GitHub 实际运行结果待修复提交推送后补记。
+修复提交 `690a833` 已推送；[GitHub CI 39101581741](https://github.com/Fantety/GDBLE/actions/runs/39101581741) 全部通过，包括 Windows、Linux、macOS x86_64/ARM64 原生构建、Android 双 ABI/AAR、组装后的完整 provenance 校验及全部 8 个 `final-addon-smoke` job。Windows 两个 Godot 版本均已在真实 GitHub runner 验证，不以本地测试替代。本地 actionlint、25 项 Python 回归及两版真实 Godot 的无扩展名别名启动也通过。硬件 BLE 与 Android 模拟器验收仍未完成。
+
+已将该运行验证过的 `assembled-addon` 原样回写到 `addons/gdble`，包含两份新 macOS 库。GitHub artifact ID 为 `12127166311`，下载归档 SHA-256 与 GitHub API 公布值一致：`abdbc6215d1ed5a66700faa88d1553afb64961615cee5aab62ab273479fe6807`。回写后完整 provenance、AAR 结构和全部文件哈希校验通过，`release_ready=true`、`incomplete=[]`；这表示产物齐备，不代替硬件验收。内嵌构建提交为 `690a833`，源码 SHA-256 仍为 `eac97287ca3f62975d079b9e2b2f2c67984314d6f2f3282d0e9cacdcb6fc023e`。
 
 ## 2026-10-18：公开仓库复查修复
 

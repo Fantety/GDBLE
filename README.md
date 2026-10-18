@@ -88,10 +88,10 @@
 | --- | --- | --- | --- |
 | Windows | x86_64 | Windows 10 | 原生构建、Godot 加载及假后端测试；真实 BLE 设备流程需另行验收 |
 | Linux | x86_64 | 发行版需提供 BlueZ/DBus | 构建及 Godot 加载；真实 BlueZ/设备流程需另行验收 |
-| macOS | x86_64、ARM64 | macOS 10.15 / 11 | 源码检查通过；当前历史库待原生重建与加载验收 |
+| macOS | x86_64、ARM64 | macOS 10.15 / 11 | 两种架构均在 GitHub runner 原生构建，Godot 4.2.2 / 4.6.1 加载通过；真实 BLE 设备流程需另行验收 |
 | Android | ARM64、x86_64 | API 23，compileSdk 34 | 双 ABI 构建及 AAR 结构检查；ARM64 真机 BLE 与 x86_64 模拟器验收待完成 |
 
-上表不代表完整硬件认证。每次修改源码后都必须重新核验产物摘要；最新检查记录见 [修复验收记录](docs/REPAIR_VALIDATION.md)。开发分支的 `addons/gdble` 可能包含待更新产物，不能作为全平台发行包。Asset Library 应绑定已通过发行验收的 tag。
+上表不代表完整硬件认证。每次修改源码后都必须重新核验产物摘要；最新检查记录见 [修复验收记录](docs/REPAIR_VALIDATION.md)。分发开发分支的 `addons/gdble` 前，应核对 `BUILD_INFO.json` 和对应平台验收记录。Asset Library 应绑定已通过发行验收的 tag。
 
 不支持 Android ARMv7、iOS 和自动重连。Android ARM64 用于真机，x86_64 主要用于模拟器加载测试。
 

@@ -88,10 +88,10 @@ A Rust BLE GDExtension for Godot 4.2+, built on btleplug 0.12.0. It supports sca
 | --- | --- | --- | --- |
 | Windows | x86_64 | Windows 10 | Native build, Godot loading, and fake-backend tests; physical BLE acceptance is separate |
 | Linux | x86_64 | BlueZ/DBus runtime | Build and Godot loading; physical BlueZ/device acceptance is separate |
-| macOS | x86_64, ARM64 | macOS 10.15 / 11 | Source checks pass; historical libraries still require native rebuilding and loading tests |
+| macOS | x86_64, ARM64 | macOS 10.15 / 11 | Both architectures build natively on GitHub runners and load with Godot 4.2.2 / 4.6.1; physical BLE acceptance is separate |
 | Android | ARM64, x86_64 | API 23, compileSdk 34 | Both ABIs build and AAR structure is checked; ARM64 hardware BLE and x86_64 emulator acceptance remain outstanding |
 
-This is not a complete hardware certification matrix. Recheck artifact provenance after every source change; see the [validation record](docs/REPAIR_VALIDATION.md) for current evidence. The development branch's `addons/gdble` may contain artifacts awaiting replacement and is not a complete cross-platform release. Asset Library entries should use a tag that has passed release acceptance.
+This is not a complete hardware certification matrix. Recheck artifact provenance after every source change; see the [validation record](docs/REPAIR_VALIDATION.md) for current evidence. Before distributing the development branch's `addons/gdble`, check `BUILD_INFO.json` and the corresponding platform acceptance record. Asset Library entries should use a tag that has passed release acceptance.
 
 Android ARMv7, iOS, and automatic reconnect are not supported in 0.6.0.
 
